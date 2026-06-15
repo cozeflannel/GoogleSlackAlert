@@ -153,6 +153,21 @@ function getDownstreamConfig() {
  */
 function installTriggers() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
+  
+  // If run manually from the editor, active spreadsheet might be null.
+  // Fall back to the ID saved in properties.
+  if (!ss) {
+    var docProps = PropertiesService.getDocumentProperties();
+    var ssId = docProps.getProperty('SPREADSHEET_ID');
+    if (ssId) {
+      ss = SpreadsheetApp.openById(ssId);
+    }
+  }
+
+  if (!ss) {
+    Logger.log('Could not find active spreadsheet. Please click "Save Configuration" in the Sheet sidebar instead.');
+    return;
+  }
   var handlersToClean = ['onSheetEdit', 'onSheetChange', 'sendWeeklyDigest', 'runDailyAlerts'];
 
   // Remove any existing triggers for the handlers we manage
