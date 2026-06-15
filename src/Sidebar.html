@@ -258,6 +258,15 @@
   </button>
   <div id="statusMessage"></div>
 
+  <!-- ── Danger Zone ───────────────────────────────────────────── -->
+  <div style="margin-top: 30px; border-top: 1px solid #ffbdad; padding-top: 15px;">
+    <div class="section-title" style="color:#bf2600; margin-top:0; border-bottom:none;">Danger Zone</div>
+    <p style="font-size:11px;color:#555;margin-bottom:10px;">Stop all monitoring, delete triggers, and completely disconnect this sheet.</p>
+    <button class="btn btn-secondary" style="border-color:#ffbdad; color:#bf2600;" onclick="disconnectAppComplete()" id="disconnectAppBtn">
+      Disconnect App Completely
+    </button>
+  </div>
+
 <script>
   var allSheetsInfo = null;
 
@@ -588,6 +597,32 @@
     var s       = document.getElementById('statusMessage');
     s.className = 'error';
     s.textContent = 'Error: ' + err.message;
+  }
+
+  // ── Disconnect ──────────────────────────────────────────────────
+
+  function disconnectAppComplete() {
+    if (!confirm('Are you sure you want to disconnect SheetAlerts? This will delete all triggers, clear configuration, and remove the Slack connection for this sheet.')) {
+      return;
+    }
+    
+    var btn = document.getElementById('disconnectAppBtn');
+    btn.disabled = true;
+    btn.textContent = 'Disconnecting...';
+    
+    google.script.run
+      .withSuccessHandler(function() {
+        document.getElementById('statusMessage').className = 'success';
+        document.getElementById('statusMessage').textContent = '✅ App Disconnected. Please close and reopen the sidebar.';
+        btn.textContent = 'Disconnected';
+      })
+      .withFailureHandler(function(err) {
+        document.getElementById('statusMessage').className = 'error';
+        document.getElementById('statusMessage').textContent = 'Error: ' + err.message;
+        btn.disabled = false;
+        btn.textContent = 'Disconnect App Completely';
+      })
+      .disconnectApp();
   }
 
   window.onload = init;

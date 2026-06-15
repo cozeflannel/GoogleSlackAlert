@@ -146,6 +146,43 @@ function getDownstreamConfig() {
 }
 
 /**
+ * Disconnects the app completely from this sheet.
+ * Clears all properties and deletes all triggers.
+ */
+function disconnectApp() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var spreadsheetId = ss ? ss.getId() : null;
+  
+  if (!spreadsheetId) {
+    var docProps = PropertiesService.getDocumentProperties();
+    spreadsheetId = docProps.getProperty('SPREADSHEET_ID');
+  }
+
+  // 1. Delete triggers
+  var handlersToClean = ['onSheetEdit', 'onSheetChange', 'sendWeeklyDigest', 'runDailyAlerts'];
+  ScriptApp.getProjectTriggers().forEach(function(t) {
+    if (handlersToClean.indexOf(t.getHandlerFunction()) !== -1) {
+      ScriptApp.deleteTrigger(t);
+    }
+  });
+
+  // 2. Clear Document Properties
+  PropertiesService.getDocumentProperties().deleteAllProperties();
+
+  // 3. Clear Script Properties keyed to this sheet
+  if (spreadsheetId) {
+    var scriptProps = PropertiesService.getScriptProperties();
+    scriptProps.deleteProperty('SLACK_TOKEN_' + spreadsheetId);
+    scriptProps.deleteProperty('SLACK_CHANNEL_' + spreadsheetId);
+    scriptProps.deleteProperty('INSTALLER_EMAIL_' + spreadsheetId);
+    scriptProps.deleteProperty('PENDING_ALERTS_' + spreadsheetId);
+    // Note: purposefully not deleting the global Slack Client ID/Secret here
+  }
+
+  return { success: true };
+}
+
+/**
  * Installs all three triggers for this spreadsheet, removing stale copies first.
  * 1. onEdit   (installable) → onSheetEdit
  * 2. onChange (installable) → onSheetChange
