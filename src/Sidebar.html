@@ -1,0 +1,581 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <base target="_top">
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      padding: 15px;
+      color: #333;
+      font-size: 13px;
+    }
+    .form-group { margin-bottom: 14px; }
+    label { display: block; font-weight: bold; margin-bottom: 4px; }
+    input[type="text"], select {
+      width: 100%;
+      padding: 7px;
+      box-sizing: border-box;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+      font-size: 13px;
+    }
+    .section-title {
+      font-size: 14px;
+      border-bottom: 1px solid #eee;
+      padding-bottom: 5px;
+      margin-top: 18px;
+      margin-bottom: 10px;
+      color: #0052cc;
+      font-weight: bold;
+    }
+    .btn {
+      border: none;
+      padding: 9px 14px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 13px;
+      width: 100%;
+    }
+    .btn-primary  { background-color: #0052cc; color: white; margin-top: 10px; }
+    .btn-primary:hover  { background-color: #003d99; }
+    .btn-slack {
+      background-color: #4A154B; color: white;
+      display: flex; align-items: center; justify-content: center; gap: 8px;
+    }
+    .btn-slack:hover  { background-color: #3a1039; }
+    .btn-danger { background-color: #de350b; color: white; margin-top: 6px; }
+    .btn-danger:hover { background-color: #bf2600; }
+    .btn-secondary {
+      background-color: #f4f5f7; color: #333;
+      border: 1px solid #ccc; margin-top: 6px;
+    }
+    .btn-secondary:hover { background-color: #e4e5e7; }
+    .status-badge {
+      display: inline-block; padding: 3px 8px;
+      border-radius: 10px; font-size: 11px; font-weight: bold; margin-left: 6px;
+    }
+    .status-connected    { background: #e3fcef; color: #006644; }
+    .status-disconnected { background: #ffebe6; color: #bf2600; }
+    #statusMessage {
+      margin-top: 12px; font-weight: bold;
+      text-align: center; font-size: 12px;
+    }
+    .success { color: #006644; }
+    .error   { color: #bf2600; }
+    .info-box {
+      background: #f4f5f7; border-radius: 4px;
+      padding: 8px; font-size: 11px; color: #555; margin-top: 6px;
+    }
+    .cascade-section { display: none; margin-top: 6px; }
+  </style>
+</head>
+<body>
+
+  <!-- ── Sheet Picker ─────────────────────────────────────────── -->
+  <div class="section-title">Which sheet should we monitor?</div>
+  <div class="form-group">
+    <select id="sheetPicker" onchange="onSheetSelected()">
+      <option>Loading sheets…</option>
+    </select>
+    <div id="sheetHint" class="info-box" style="display:none;"></div>
+  </div>
+
+  <!-- ── Slack Integration ─────────────────────────────────────── -->
+  <div class="section-title">
+    Slack Integration
+    <span id="slackBadge" class="status-badge status-disconnected">Not Connected</span>
+  </div>
+
+  <div id="slackDisconnectedView">
+    <p style="font-size:12px;color:#555;margin-bottom:10px;">
+      Connect your Slack workspace so SheetAlerts can send notifications
+      and allow actions from Slack.
+    </p>
+    <button class="btn btn-slack" onclick="connectSlack()">
+      <svg width="16" height="16" viewBox="0 0 122.8 122.8">
+        <path d="M25.8 77.6c0 7.1-5.8 12.9-12.9 12.9S0 84.7 0 77.6s5.8-12.9
+          12.9-12.9h12.9v12.9zm6.5 0c0-7.1 5.8-12.9 12.9-12.9s12.9 5.8 12.9
+          12.9v32.3c0 7.1-5.8 12.9-12.9 12.9s-12.9-5.8-12.9-12.9V77.6z"
+          fill="#E01E5A"/>
+        <path d="M45.2 25.8c-7.1 0-12.9-5.8-12.9-12.9S38.1 0 45.2
+          0s12.9 5.8 12.9 12.9v12.9H45.2zm0 6.5c7.1 0 12.9 5.8 12.9
+          12.9s-5.8 12.9-12.9 12.9H12.9C5.8 58.1 0 52.3 0 45.2s5.8-12.9
+          12.9-12.9h32.3z" fill="#36C5F0"/>
+        <path d="M97 45.2c0-7.1 5.8-12.9 12.9-12.9s12.9 5.8 12.9
+          12.9-5.8 12.9-12.9 12.9H97V45.2zm-6.5 0c0 7.1-5.8 12.9-12.9
+          12.9s-12.9-5.8-12.9-12.9V12.9C64.7 5.8 70.5 0 77.6
+          0s12.9 5.8 12.9 12.9v32.3z" fill="#2EB67D"/>
+        <path d="M77.6 97c7.1 0 12.9 5.8 12.9 12.9s-5.8 12.9-12.9
+          12.9-12.9-5.8-12.9-12.9V97h12.9zm0-6.5c-7.1 0-12.9-5.8-12.9-12.9
+          s5.8-12.9 12.9-12.9h32.3c7.1 0 12.9 5.8 12.9 12.9s-5.8 12.9-12.9
+          12.9H77.6z" fill="#ECB22E"/>
+      </svg>
+      Add to Slack
+    </button>
+    <div class="info-box">
+      After clicking, you'll be taken to Slack to authorise SheetAlerts.
+      Return here once approved.
+    </div>
+  </div>
+
+  <div id="slackConnectedView" style="display:none;">
+    <div class="info-box"
+         style="color:#006644;background:#e3fcef;margin-bottom:8px;">
+      ✅ SheetAlerts is connected to your Slack workspace.
+    </div>
+    <div class="form-group">
+      <label for="slackChannel">Post alerts to channel</label>
+      <input type="text" id="slackChannel" placeholder="#general">
+    </div>
+    <button class="btn btn-danger" onclick="disconnectSlack()">
+      Disconnect Slack
+    </button>
+  </div>
+
+  <!-- ── Column Mapping ────────────────────────────────────────── -->
+  <div class="section-title">Column Mapping</div>
+
+  <!-- Empty sheet — create columns -->
+  <div id="createColumnsView" style="display:none;">
+    <div class="info-box" style="margin-bottom:10px;">
+      This sheet is empty. Name your columns below and we'll create
+      them for you.
+    </div>
+    <div class="form-group">
+      <label>Name / Identifier</label>
+      <input type="text" id="newNameCol" placeholder="e.g. Client Name">
+    </div>
+    <div class="form-group">
+      <label>Recipient Email</label>
+      <input type="text" id="newEmailCol" placeholder="e.g. Email">
+    </div>
+    <div class="form-group">
+      <label>Condition column</label>
+      <input type="text" id="newStatusCol" placeholder="e.g. Payment Status">
+    </div>
+    <div class="form-group">
+      <label>Extra Info (optional)</label>
+      <input type="text" id="newExtraCol" placeholder="e.g. Invoice Number">
+    </div>
+    <button class="btn btn-primary" onclick="createColumns()" id="createColsBtn">
+      Create Columns in Sheet
+    </button>
+    <div id="createMessage" style="margin-top:8px;font-size:12px;"></div>
+  </div>
+
+  <!-- Sheet has headers — show dropdowns -->
+  <div id="selectColumnsView" style="display:none;">
+    <div class="form-group">
+      <label>Name / Identifier column</label>
+      <select id="nameCol"></select>
+    </div>
+    <div class="form-group">
+      <label>Recipient Email column</label>
+      <select id="emailCol"></select>
+    </div>
+    <div class="form-group">
+      <label>Extra Info column (optional)</label>
+      <select id="extraInfoCol"></select>
+    </div>
+    <div class="form-group">
+      <label>Condition column</label>
+      <select id="statusCol"></select>
+    </div>
+  </div>
+
+  <!-- ── Alert Condition ───────────────────────────────────────── -->
+  <div class="section-title">Alert Condition</div>
+  <div class="form-group">
+    <label>Trigger alert when condition column equals</label>
+    <input type="text" id="triggerValue" placeholder="e.g. Unpaid">
+  </div>
+
+  <!-- ── Downstream Notifications ─────────────────────────────── -->
+  <div class="section-title">
+    Downstream Notifications
+    <span style="font-size:11px;font-weight:normal;color:#555;">— optional</span>
+  </div>
+  <div class="info-box" style="margin-bottom:10px;">
+    When you resolve an alert, SheetAlerts can automatically notify
+    the owner of another sheet in this workbook that depends on your update.
+  </div>
+  <div class="form-group">
+    <label>
+      <input type="checkbox" id="downstreamEnabled"
+             onchange="toggleDownstream()">
+      Enable downstream notifications
+    </label>
+  </div>
+
+  <div id="downstreamConfig" class="cascade-section">
+    <div class="form-group">
+      <label>Notify about which sheet</label>
+      <select id="downstreamSheet" onchange="loadDownstreamHeaders()"></select>
+    </div>
+    <div class="form-group">
+      <label>Watch column on that sheet</label>
+      <select id="downstreamWatchCol"></select>
+    </div>
+    <div class="form-group">
+      <label>Trigger when value equals</label>
+      <input type="text" id="downstreamTriggerValue" placeholder="e.g. Pending">
+    </div>
+    <div class="form-group">
+      <label>Notify this email address</label>
+      <input type="text" id="downstreamEmail"
+             placeholder="colleague@company.com">
+    </div>
+    <div class="form-group">
+      <label>Slack User ID to notify (optional)</label>
+      <input type="text" id="downstreamSlackUser" placeholder="U012AB3CD">
+      <div class="info-box">
+        Find in Slack: click their profile → More → Copy member ID
+      </div>
+    </div>
+    <div class="form-group">
+      <label>Context message</label>
+      <input type="text" id="downstreamMessage"
+             placeholder="e.g. Sheet A updated — please review">
+    </div>
+  </div>
+
+  <!-- ── Save ──────────────────────────────────────────────────── -->
+  <button class="btn btn-primary" onclick="saveConfig()" id="saveBtn">
+    Save Configuration
+  </button>
+  <div id="statusMessage"></div>
+
+<script>
+  var allSheetsInfo = null;
+
+  function init() {
+    google.script.run
+      .withSuccessHandler(function(status) { updateSlackUI(status.connected); })
+      .getSlackConnectionStatus();
+
+    google.script.run
+      .withSuccessHandler(function(info) {
+        allSheetsInfo = info;
+        buildSheetPicker(info);
+      })
+      .getSheetsInfo();
+
+    google.script.run
+      .withSuccessHandler(populateConfig)
+      .getConfig();
+  }
+
+  // ── Sheet picker ─────────────────────────────────────────────
+
+  function buildSheetPicker(info) {
+    var picker = document.getElementById('sheetPicker');
+    picker.innerHTML = '';
+    info.sheets.forEach(function(s) {
+      var opt         = document.createElement('option');
+      opt.value       = s.name;
+      opt.textContent = s.name + (s.isEmpty ? ' (empty)' : '');
+      picker.appendChild(opt);
+    });
+    var toSelect = info.savedSheetName ||
+                   (info.sheets[0] && info.sheets[0].name);
+    if (toSelect) picker.value = toSelect;
+    onSheetSelected();
+  }
+
+  function onSheetSelected() {
+    if (!allSheetsInfo) return;
+    var sheetName = document.getElementById('sheetPicker').value;
+    var info      = allSheetsInfo.sheets.filter(function(s) {
+      return s.name === sheetName;
+    })[0];
+    if (!info) return;
+
+    var hint = document.getElementById('sheetHint');
+    if (info.isEmpty) {
+      hint.style.display = 'block';
+      hint.textContent   =
+        'This sheet is empty — create your columns below.';
+      document.getElementById('createColumnsView').style.display = 'block';
+      document.getElementById('selectColumnsView').style.display = 'none';
+    } else {
+      hint.style.display = info.hasData ? 'none' : 'block';
+      if (!info.hasData) {
+        hint.textContent =
+          'Headers found but no data yet — alerts will fire once rows are added.';
+      }
+      document.getElementById('createColumnsView').style.display = 'none';
+      document.getElementById('selectColumnsView').style.display = 'block';
+      populateDropdowns(info.headers);
+    }
+  }
+
+  // ── Column creator ───────────────────────────────────────────
+
+  function createColumns() {
+    var sheetName = document.getElementById('sheetPicker').value;
+    var btn       = document.getElementById('createColsBtn');
+    var msg       = document.getElementById('createMessage');
+    btn.disabled  = true;
+    msg.textContent = 'Creating columns…';
+
+    var headers = {
+      nameCol:      document.getElementById('newNameCol').value   || 'Name',
+      emailCol:     document.getElementById('newEmailCol').value  || 'Email',
+      statusCol:    document.getElementById('newStatusCol').value || 'Status',
+      extraInfoCol: document.getElementById('newExtraCol').value
+    };
+
+    google.script.run
+      .withSuccessHandler(function(result) {
+        if (!result.success) {
+          msg.style.color = '#bf2600';
+          msg.textContent = 'Error: ' + result.error;
+          btn.disabled    = false;
+          return;
+        }
+        msg.style.color = '#006644';
+        msg.textContent = '✅ Columns created!';
+        btn.disabled    = false;
+
+        // Update cache
+        allSheetsInfo.sheets.forEach(function(s) {
+          if (s.name === sheetName) {
+            s.isEmpty  = false;
+            s.hasData  = false;
+            s.headers  = result.columns;
+          }
+        });
+
+        setTimeout(function() {
+          document.getElementById('createColumnsView').style.display = 'none';
+          document.getElementById('selectColumnsView').style.display = 'block';
+          populateDropdowns(result.columns);
+          // Auto-select in the order they were created
+          document.getElementById('nameCol').value      = '0';
+          document.getElementById('emailCol').value     = '1';
+          document.getElementById('statusCol').value    = '2';
+          document.getElementById('extraInfoCol').value =
+            result.columns.length > 3 ? '3' : '-1';
+          msg.textContent = '';
+        }, 800);
+      })
+      .withFailureHandler(function(err) {
+        msg.style.color = '#bf2600';
+        msg.textContent = 'Error: ' + err.message;
+        btn.disabled    = false;
+      })
+      .createSheetHeaders(sheetName, headers);
+  }
+
+  // ── Dropdown helpers ─────────────────────────────────────────
+
+  function populateDropdowns(headers) {
+    var selects     = ['nameCol','emailCol','extraInfoCol','statusCol'];
+    var optionsHtml = '<option value="-1">-- None --</option>';
+    headers.forEach(function(h, i) {
+      if (h) optionsHtml +=
+        '<option value="' + i + '">' + h + '</option>';
+    });
+    selects.forEach(function(id) {
+      var el       = document.getElementById(id);
+      var savedVal = el.getAttribute('data-saved-val');
+      el.innerHTML = optionsHtml;
+      if (savedVal !== null && savedVal !== undefined) el.value = savedVal;
+    });
+  }
+
+  function populateConfig(config) {
+    if (!config) return;
+    if (config.SLACK_CHANNEL)
+      document.getElementById('slackChannel').value  = config.SLACK_CHANNEL;
+    if (config.TRIGGER_VALUE)
+      document.getElementById('triggerValue').value  = config.TRIGGER_VALUE;
+
+    var selects = ['nameCol','emailCol','extraInfoCol','statusCol'];
+    var keys    = ['NAME_COL','EMAIL_COL','EXTRA_INFO_COL','STATUS_COL'];
+    selects.forEach(function(id, idx) {
+      var el  = document.getElementById(id);
+      var val = config[keys[idx]];
+      if (val !== undefined && val !== null) {
+        el.setAttribute('data-saved-val', val);
+        if (el.options.length > 1) el.value = val;
+      }
+    });
+
+    // Restore downstream config
+    if (config.DOWNSTREAM_CONFIG) {
+      try {
+        var ds = JSON.parse(config.DOWNSTREAM_CONFIG);
+        if (ds && ds.enabled) {
+          document.getElementById('downstreamEnabled').checked = true;
+          toggleDownstream(ds);
+        }
+      } catch(e) {}
+    }
+  }
+
+  // ── Slack ────────────────────────────────────────────────────
+
+  function updateSlackUI(connected) {
+    var badge           = document.getElementById('slackBadge');
+    var disconnectedView = document.getElementById('slackDisconnectedView');
+    var connectedView   = document.getElementById('slackConnectedView');
+    if (connected) {
+      badge.className         = 'status-badge status-connected';
+      badge.textContent       = 'Connected';
+      disconnectedView.style.display = 'none';
+      connectedView.style.display    = 'block';
+    } else {
+      badge.className         = 'status-badge status-disconnected';
+      badge.textContent       = 'Not Connected';
+      disconnectedView.style.display = 'block';
+      connectedView.style.display    = 'none';
+    }
+  }
+
+  function connectSlack() {
+    google.script.run.withSuccessHandler(function(url) {
+      window.open(url, '_blank', 'width=600,height=700');
+      var poll = setInterval(function() {
+        google.script.run.withSuccessHandler(function(status) {
+          if (status.connected) { clearInterval(poll); updateSlackUI(true); }
+        }).getSlackConnectionStatus();
+      }, 3000);
+      setTimeout(function() { clearInterval(poll); }, 180000);
+    }).getSlackOAuthUrl();
+  }
+
+  function disconnectSlack() {
+    google.script.run.withSuccessHandler(function() {
+      updateSlackUI(false);
+    }).disconnectSlack();
+  }
+
+  // ── Downstream ───────────────────────────────────────────────
+
+  function toggleDownstream(existingConfig) {
+    var enabled = document.getElementById('downstreamEnabled').checked;
+    var section = document.getElementById('downstreamConfig');
+    section.style.display = enabled ? 'block' : 'none';
+
+    if (enabled) {
+      loadDownstreamSheets(existingConfig);
+    }
+  }
+
+  function loadDownstreamSheets(existingConfig) {
+    google.script.run
+      .withSuccessHandler(function(names) {
+        var current = document.getElementById('sheetPicker').value;
+        var sel     = document.getElementById('downstreamSheet');
+        sel.innerHTML = '';
+        names.forEach(function(name) {
+          if (name === current) return;
+          var opt         = document.createElement('option');
+          opt.value       = opt.textContent = name;
+          sel.appendChild(opt);
+        });
+        if (existingConfig && existingConfig.sheetName) {
+          sel.value = existingConfig.sheetName;
+        }
+        loadDownstreamHeaders(existingConfig);
+      }).getAllSheetNames();
+  }
+
+  function loadDownstreamHeaders(existingConfig) {
+    var sheetName = document.getElementById('downstreamSheet').value;
+    if (!sheetName) return;
+
+    google.script.run
+      .withSuccessHandler(function(headers) {
+        var sel       = document.getElementById('downstreamWatchCol');
+        sel.innerHTML = '<option value="-1">-- Select column --</option>';
+        headers.forEach(function(h, i) {
+          if (!h) return;
+          var opt         = document.createElement('option');
+          opt.value       = i;
+          opt.textContent = h;
+          sel.appendChild(opt);
+        });
+        // Restore saved values
+        if (existingConfig) {
+          sel.value = existingConfig.watchCol;
+          document.getElementById('downstreamTriggerValue').value =
+            existingConfig.triggerValue    || '';
+          document.getElementById('downstreamEmail').value =
+            existingConfig.notifyEmail     || '';
+          document.getElementById('downstreamSlackUser').value =
+            existingConfig.notifySlackUser || '';
+          document.getElementById('downstreamMessage').value =
+            existingConfig.cascadeMessage  || '';
+        }
+      }).getHeadersForSheet(sheetName);
+  }
+
+  function getDownstreamConfigFromForm() {
+    var enabled = document.getElementById('downstreamEnabled').checked;
+    if (!enabled) return { enabled: false };
+    return {
+      enabled:         true,
+      sheetName:       document.getElementById('downstreamSheet').value,
+      watchCol:        parseInt(
+                         document.getElementById('downstreamWatchCol').value),
+      triggerValue:    document.getElementById('downstreamTriggerValue').value,
+      notifyEmail:     document.getElementById('downstreamEmail').value,
+      notifySlackUser: document.getElementById('downstreamSlackUser').value,
+      cascadeMessage:  document.getElementById('downstreamMessage').value
+    };
+  }
+
+  // ── Save ─────────────────────────────────────────────────────
+
+  function saveConfig() {
+    var btn = document.getElementById('saveBtn');
+    var s   = document.getElementById('statusMessage');
+    btn.disabled  = true;
+    s.className   = '';
+    s.textContent = 'Saving…';
+
+    var sheetName = document.getElementById('sheetPicker').value;
+
+    var config = {
+      SHEET_NAME:     sheetName,
+      SLACK_CHANNEL:  document.getElementById('slackChannel')
+                        ? document.getElementById('slackChannel').value : '',
+      NAME_COL:       document.getElementById('nameCol').value,
+      EMAIL_COL:      document.getElementById('emailCol').value,
+      EXTRA_INFO_COL: document.getElementById('extraInfoCol').value,
+      STATUS_COL:     document.getElementById('statusCol').value,
+      TRIGGER_VALUE:  document.getElementById('triggerValue').value
+    };
+
+    var downstream = getDownstreamConfigFromForm();
+
+    google.script.run
+      .withSuccessHandler(function() {
+        // Save downstream config as a separate call
+        google.script.run
+          .withSuccessHandler(function() {
+            btn.disabled  = false;
+            s.className   = 'success';
+            s.textContent = '✅ Saved! Monitoring "' + sheetName + '"';
+            setTimeout(function() { s.textContent = ''; }, 4000);
+          })
+          .withFailureHandler(handleSaveError)
+          .saveDownstreamConfig(downstream);
+      })
+      .withFailureHandler(handleSaveError)
+      .saveConfig(config);
+  }
+
+  function handleSaveError(err) {
+    document.getElementById('saveBtn').disabled = false;
+    var s       = document.getElementById('statusMessage');
+    s.className = 'error';
+    s.textContent = 'Error: ' + err.message;
+  }
+
+  window.onload = init;
+</script>
+</body>
+</html>
