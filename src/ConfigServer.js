@@ -161,16 +161,23 @@ function getSlackConnectionStatus() {
 
 function getSlackOAuthUrl() {
   var spreadsheetId = SpreadsheetApp.getActiveSpreadsheet().getId();
-  var clientId      = PropertiesService.getScriptProperties()
-                        .getProperty('SLACK_CLIENT_ID');
-  var redirectUri   = ScriptApp.getService().getUrl() + "?action=oauth_callback";
-  var scopes        = 'chat:write,channels:read,channels:join,app_mentions:read';
+  var scriptProps   = PropertiesService.getScriptProperties();
+  var clientId      = scriptProps.getProperty('SLACK_CLIENT_ID');
+  
+  // Use the stable /exec deployment URL stored at setup time, not the /dev URL
+  var deployedUrl   = scriptProps.getProperty('DEPLOYED_WEBAPP_URL');
+  if (!deployedUrl) {
+    throw new Error('DEPLOYED_WEBAPP_URL not set in Script Properties. Run setupDeveloperCredentials() after deploying.');
+  }
+  
+  var redirectUri = deployedUrl + '?action=oauth_callback';
+  var scopes      = 'chat:write,channels:read,channels:join,app_mentions:read';
 
   return 'https://slack.com/oauth/v2/authorize' +
-    '?client_id='     + encodeURIComponent(clientId) +
-    '&scope='         + encodeURIComponent(scopes) +
-    '&redirect_uri='  + encodeURIComponent(redirectUri) +
-    '&state='         + encodeURIComponent(spreadsheetId);
+    '?client_id='    + encodeURIComponent(clientId) +
+    '&scope='        + encodeURIComponent(scopes) +
+    '&redirect_uri=' + encodeURIComponent(redirectUri) +
+    '&state='        + encodeURIComponent(spreadsheetId);
 }
 
 function disconnectSlack() {
@@ -182,7 +189,8 @@ function disconnectSlack() {
 function setupDeveloperCredentials() {
   PropertiesService.getScriptProperties().setProperties({
     'SLACK_CLIENT_ID':     'YOUR_CLIENT_ID_HERE',
-    'SLACK_CLIENT_SECRET': 'YOUR_CLIENT_SECRET_HERE'
+    'SLACK_CLIENT_SECRET': 'YOUR_CLIENT_SECRET_HERE',
+    'DEPLOYED_WEBAPP_URL': 'https://script.google.com/macros/s/YOUR_DEPLOYMENT_ID/exec'
   });
   Logger.log('Developer credentials saved.');
 }
