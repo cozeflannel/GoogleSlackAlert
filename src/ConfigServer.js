@@ -101,33 +101,37 @@ function getConfig() {
     EMAIL_COL:         props.getProperty('EMAIL_COL'),
     EXTRA_INFO_COL:    props.getProperty('EXTRA_INFO_COL'),
     STATUS_COL:        props.getProperty('STATUS_COL'),
+    DATE_COL:          props.getProperty('DATE_COL'),
     TRIGGER_VALUE:     props.getProperty('TRIGGER_VALUE'),
     DOWNSTREAM_CONFIG: props.getProperty('DOWNSTREAM_CONFIG')
   };
 }
 
 function saveConfig(config) {
-  var spreadsheetId = SpreadsheetApp.getActiveSpreadsheet().getId();
-  var docProps      = PropertiesService.getDocumentProperties();
-  var scriptProps   = PropertiesService.getScriptProperties();
+  var spreadsheetId   = SpreadsheetApp.getActiveSpreadsheet().getId();
+  var installerEmail  = Session.getActiveUser().getEmail();
+  var docProps        = PropertiesService.getDocumentProperties();
+  var scriptProps     = PropertiesService.getScriptProperties();
 
   docProps.setProperties({
-    'SHEET_NAME':     config.SHEET_NAME     || '',
-    'SLACK_CHANNEL':  config.SLACK_CHANNEL  || '',
-    'NAME_COL':       config.NAME_COL,
-    'EMAIL_COL':      config.EMAIL_COL,
-    'EXTRA_INFO_COL': config.EXTRA_INFO_COL,
-    'STATUS_COL':     config.STATUS_COL,
-    'TRIGGER_VALUE':  config.TRIGGER_VALUE,
-    'SPREADSHEET_ID': spreadsheetId
+    'SHEET_NAME':        config.SHEET_NAME     || '',
+    'SLACK_CHANNEL':     config.SLACK_CHANNEL  || '',
+    'NAME_COL':          config.NAME_COL,
+    'EMAIL_COL':         config.EMAIL_COL,
+    'EXTRA_INFO_COL':    config.EXTRA_INFO_COL,
+    'STATUS_COL':        config.STATUS_COL,
+    'DATE_COL':          config.DATE_COL       || '-1',
+    'TRIGGER_VALUE':     config.TRIGGER_VALUE,
+    'SPREADSHEET_ID':    spreadsheetId,
+    'INSTALLER_EMAIL':   installerEmail
   });
 
-  // Write SPREADSHEET_ID to script props so time-based triggers can find it
+  // Mirror keys that time-based / webhook handlers need via script props
   scriptProps.setProperty('SPREADSHEET_ID', spreadsheetId);
-  // Set dynamic key separately to avoid linter error
   scriptProps.setProperty('SLACK_CHANNEL_' + spreadsheetId, config.SLACK_CHANNEL || '');
+  scriptProps.setProperty('INSTALLER_EMAIL_' + spreadsheetId, installerEmail);
 
-  installTrigger();
+  installTriggers();
 }
 
 function saveDownstreamConfig(config) {
@@ -141,15 +145,50 @@ function getDownstreamConfig() {
   return raw ? JSON.parse(raw) : null;
 }
 
-function installTrigger() {
+/**
+ * Installs all three triggers for this spreadsheet, removing stale copies first.
+ * 1. onEdit   (installable) → onSheetEdit
+ * 2. onChange (installable) → onSheetChange
+ * 3. Weekly time-based      → sendWeeklyDigest (Sunday 08:00)
+ */
+function installTriggers() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var handlersToClean = ['onSheetEdit', 'onSheetChange', 'sendWeeklyDigest', 'runDailyAlerts'];
+
+  // Remove any existing triggers for the handlers we manage
   ScriptApp.getProjectTriggers().forEach(function(t) {
-    if (t.getHandlerFunction() === 'runDailyAlerts') {
+    if (handlersToClean.indexOf(t.getHandlerFunction()) !== -1) {
       ScriptApp.deleteTrigger(t);
     }
   });
-  ScriptApp.newTrigger('runDailyAlerts')
-    .timeBased().everyDays(1).atHour(8).create();
+
+  // 1. Installable onEdit trigger — fires when a user manually edits a cell
+  ScriptApp.newTrigger('onSheetEdit')
+    .forSpreadsheet(ss)
+    .onEdit()
+    .create();
+
+  // 2. Installable onChange trigger — fires when any cell value changes,
+  //    including formula recalculations (e.g. a date formula flipping to "Late")
+  ScriptApp.newTrigger('onSheetChange')
+    .forSpreadsheet(ss)
+    .onChange()
+    .create();
+
+  // 3. Weekly digest — every Sunday at 08:00 in the spreadsheet's timezone
+  ScriptApp.newTrigger('sendWeeklyDigest')
+    .timeBased()
+    .onWeekDay(ScriptApp.WeekDay.SUNDAY)
+    .atHour(8)
+    .create();
+
+  Logger.log('Triggers installed: onSheetEdit, onSheetChange, sendWeeklyDigest');
+}
+
+// Legacy alias kept so any existing time-based trigger on runDailyAlerts
+// continues to work until it is cleaned up by the next saveConfig().
+function installTrigger() {
+  installTriggers();
 }
 
 function getSlackConnectionStatus() {
@@ -163,15 +202,15 @@ function getSlackOAuthUrl() {
   var spreadsheetId = SpreadsheetApp.getActiveSpreadsheet().getId();
   var scriptProps   = PropertiesService.getScriptProperties();
   var clientId      = scriptProps.getProperty('SLACK_CLIENT_ID');
-  
+
   // Use the stable /exec deployment URL stored at setup time, not the /dev URL
   var deployedUrl   = scriptProps.getProperty('DEPLOYED_WEBAPP_URL');
   if (!deployedUrl) {
     throw new Error('DEPLOYED_WEBAPP_URL not set in Script Properties. Run setupDeveloperCredentials() after deploying.');
   }
-  
+
   var redirectUri = deployedUrl + '?action=oauth_callback';
-  var scopes      = 'chat:write,channels:read,channels:join,app_mentions:read';
+  var scopes      = 'chat:write,chat:write.public,channels:read,channels:join,app_mentions:read';
 
   return 'https://slack.com/oauth/v2/authorize' +
     '?client_id='    + encodeURIComponent(clientId) +
@@ -186,6 +225,7 @@ function disconnectSlack() {
     .deleteProperty('SLACK_TOKEN_' + spreadsheetId);
 }
 
+// Run ONCE from the Apps Script editor to store your Slack app credentials
 function setupDeveloperCredentials() {
   PropertiesService.getScriptProperties().setProperties({
     'SLACK_CLIENT_ID':     'YOUR_CLIENT_ID_HERE',

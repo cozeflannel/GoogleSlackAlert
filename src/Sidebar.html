@@ -73,6 +73,11 @@
 
   <!-- ── Sheet Picker ─────────────────────────────────────────── -->
   <div class="section-title">Which sheet should we monitor?</div>
+  <div class="info-box" style="margin-bottom:10px;">
+    SheetAlerts will watch this sheet for <b>three types of events</b>:
+    edits by other users (instant), formula-driven condition changes (instant),
+    and a weekly digest summary.
+  </div>
   <div class="form-group">
     <select id="sheetPicker" onchange="onSheetSelected()">
       <option>Loading sheets…</option>
@@ -181,13 +186,21 @@
       <label>Condition column</label>
       <select id="statusCol"></select>
     </div>
+    <div class="form-group">
+      <label>Due Date column <span style="font-weight:normal;color:#777;">(optional — used to detect Late/Overdue flips)</span></label>
+      <select id="dateCol"></select>
+    </div>
   </div>
 
   <!-- ── Alert Condition ───────────────────────────────────────── -->
   <div class="section-title">Alert Condition</div>
+  <div class="info-box" style="margin-bottom:10px;">
+    SheetAlerts fires instantly when the condition column matches this value —
+    whether set manually or computed by a formula (e.g. <code>IF(A2&lt;TODAY(),"Late","On Time")</code>).
+  </div>
   <div class="form-group">
     <label>Trigger alert when condition column equals</label>
-    <input type="text" id="triggerValue" placeholder="e.g. Unpaid">
+    <input type="text" id="triggerValue" placeholder="e.g. Late, Unpaid, Overdue">
   </div>
 
   <!-- ── Downstream Notifications ─────────────────────────────── -->
@@ -370,7 +383,7 @@
   // ── Dropdown helpers ─────────────────────────────────────────
 
   function populateDropdowns(headers) {
-    var selects     = ['nameCol','emailCol','extraInfoCol','statusCol'];
+    var selects     = ['nameCol','emailCol','extraInfoCol','statusCol','dateCol'];
     var optionsHtml = '<option value="-1">-- None --</option>';
     headers.forEach(function(h, i) {
       if (h) optionsHtml +=
@@ -387,12 +400,12 @@
   function populateConfig(config) {
     if (!config) return;
     if (config.SLACK_CHANNEL)
-      document.getElementById('slackChannel').value  = config.SLACK_CHANNEL;
+      document.getElementById('slackChannel').value = config.SLACK_CHANNEL;
     if (config.TRIGGER_VALUE)
-      document.getElementById('triggerValue').value  = config.TRIGGER_VALUE;
+      document.getElementById('triggerValue').value = config.TRIGGER_VALUE;
 
-    var selects = ['nameCol','emailCol','extraInfoCol','statusCol'];
-    var keys    = ['NAME_COL','EMAIL_COL','EXTRA_INFO_COL','STATUS_COL'];
+    var selects = ['nameCol','emailCol','extraInfoCol','statusCol','dateCol'];
+    var keys    = ['NAME_COL','EMAIL_COL','EXTRA_INFO_COL','STATUS_COL','DATE_COL'];
     selects.forEach(function(id, idx) {
       var el  = document.getElementById(id);
       var val = config[keys[idx]];
@@ -546,6 +559,8 @@
       EMAIL_COL:      document.getElementById('emailCol').value,
       EXTRA_INFO_COL: document.getElementById('extraInfoCol').value,
       STATUS_COL:     document.getElementById('statusCol').value,
+      DATE_COL:       document.getElementById('dateCol')
+                        ? document.getElementById('dateCol').value : '-1',
       TRIGGER_VALUE:  document.getElementById('triggerValue').value
     };
 
