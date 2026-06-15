@@ -108,11 +108,13 @@ function getConfig() {
 }
 
 function saveConfig(config) {
-  var spreadsheetId   = SpreadsheetApp.getActiveSpreadsheet().getId();
-  var installerEmail  = Session.getActiveUser().getEmail();
-  var docProps        = PropertiesService.getDocumentProperties();
-  var scriptProps     = PropertiesService.getScriptProperties();
+  var ss            = SpreadsheetApp.getActiveSpreadsheet();
+  var spreadsheetId = ss.getId();
+  var installerEmail = Session.getActiveUser().getEmail();
+  var docProps      = PropertiesService.getDocumentProperties();
+  var scriptProps   = PropertiesService.getScriptProperties();
 
+  // ── DocumentProperties (scoped to this spreadsheet) ──────────────────────
   docProps.setProperties({
     'SHEET_NAME':        config.SHEET_NAME     || '',
     'SLACK_CHANNEL':     config.SLACK_CHANNEL  || '',
@@ -126,10 +128,14 @@ function saveConfig(config) {
     'INSTALLER_EMAIL':   installerEmail
   });
 
-  // Mirror keys that time-based / webhook handlers need via script props
+  // ── ScriptProperties (global — keyed per spreadsheet to support multi-tenant) ──
+  // SLACK_CHANNEL and INSTALLER_EMAIL are keyed so webhook handlers can look
+  // them up without a DocumentProperties context (e.g. doPost, publishAppHome).
+  // Note: setProperties() does not support computed/dynamic keys, so we use
+  // individual setProperty() calls here.
   scriptProps.setProperty('SPREADSHEET_ID', spreadsheetId);
-  scriptProps.setProperty('SLACK_CHANNEL_' + spreadsheetId, config.SLACK_CHANNEL || '');
-  scriptProps.setProperty('INSTALLER_EMAIL_' + spreadsheetId, installerEmail);
+  scriptProps.setProperty('SLACK_CHANNEL_'    + spreadsheetId, config.SLACK_CHANNEL || '');
+  scriptProps.setProperty('INSTALLER_EMAIL_'  + spreadsheetId, installerEmail);
 
   installTriggers();
 }
@@ -146,102 +152,103 @@ function getDownstreamConfig() {
 }
 
 /**
- * Disconnects the app completely from this sheet.
- * Clears all properties and deletes all triggers.
+ * Completely disconnects the add-on from this sheet.
+ * Deletes all managed triggers, clears all properties.
  */
 function disconnectApp() {
-  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var ss            = SpreadsheetApp.getActiveSpreadsheet();
   var spreadsheetId = ss ? ss.getId() : null;
-  
+
   if (!spreadsheetId) {
     var docProps = PropertiesService.getDocumentProperties();
     spreadsheetId = docProps.getProperty('SPREADSHEET_ID');
   }
 
-  // 1. Delete triggers
-  var handlersToClean = ['onSheetEdit', 'onSheetChange', 'sendWeeklyDigest', 'runDailyAlerts'];
+  // 1. Delete managed triggers
+  var handlersToClean = [
+    'onSheetEdit', 'onSheetChange', 'sendWeeklyDigest', 'runDailyAlerts'
+  ];
   ScriptApp.getProjectTriggers().forEach(function(t) {
     if (handlersToClean.indexOf(t.getHandlerFunction()) !== -1) {
       ScriptApp.deleteTrigger(t);
     }
   });
 
-  // 2. Clear Document Properties
+  // 2. Clear DocumentProperties
   PropertiesService.getDocumentProperties().deleteAllProperties();
 
-  // 3. Clear Script Properties keyed to this sheet
+  // 3. Clear per-sheet ScriptProperties
   if (spreadsheetId) {
     var scriptProps = PropertiesService.getScriptProperties();
-    scriptProps.deleteProperty('SLACK_TOKEN_' + spreadsheetId);
-    scriptProps.deleteProperty('SLACK_CHANNEL_' + spreadsheetId);
-    scriptProps.deleteProperty('INSTALLER_EMAIL_' + spreadsheetId);
+    scriptProps.deleteProperty('SLACK_TOKEN_'    + spreadsheetId);
+    scriptProps.deleteProperty('SLACK_CHANNEL_'  + spreadsheetId);
+    scriptProps.deleteProperty('INSTALLER_EMAIL_'+ spreadsheetId);
     scriptProps.deleteProperty('PENDING_ALERTS_' + spreadsheetId);
-    // Note: purposefully not deleting the global Slack Client ID/Secret here
+    // Intentionally not deleting global SLACK_CLIENT_ID/SECRET or DEPLOYED_WEBAPP_URL
   }
 
   return { success: true };
 }
 
 /**
- * Installs all three triggers for this spreadsheet, removing stale copies first.
- * 1. onEdit   (installable) → onSheetEdit
- * 2. onChange (installable) → onSheetChange
- * 3. Weekly time-based      → sendWeeklyDigest (Sunday 08:00)
+ * Installs all triggers for this spreadsheet, removing stale copies first.
+ *
+ * Triggers installed:
+ *   1. onEdit    (installable) → onSheetEdit
+ *   2. onChange  (installable) → onSheetChange
+ *   3. Weekly time-based       → sendWeeklyDigest (Sunday 08:00)
  */
 function installTriggers() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
-  
-  // If run manually from the editor, active spreadsheet might be null.
-  // Fall back to the ID saved in properties.
+
   if (!ss) {
-    var docProps = PropertiesService.getDocumentProperties();
-    var ssId = docProps.getProperty('SPREADSHEET_ID');
+    var ssId = PropertiesService.getDocumentProperties()
+                 .getProperty('SPREADSHEET_ID');
     if (ssId) {
       ss = SpreadsheetApp.openById(ssId);
     }
   }
 
   if (!ss) {
-    Logger.log('Could not find active spreadsheet. Please click "Save Configuration" in the Sheet sidebar instead.');
+    Logger.log('installTriggers: no active spreadsheet found.');
     return;
   }
-  var handlersToClean = ['onSheetEdit', 'onSheetChange', 'sendWeeklyDigest', 'runDailyAlerts'];
 
-  // Remove any existing triggers for the handlers we manage
+  var handlersToClean = [
+    'onSheetEdit', 'onSheetChange', 'sendWeeklyDigest', 'runDailyAlerts'
+  ];
+
+  // Remove any existing triggers for our handlers
   ScriptApp.getProjectTriggers().forEach(function(t) {
     if (handlersToClean.indexOf(t.getHandlerFunction()) !== -1) {
       ScriptApp.deleteTrigger(t);
     }
   });
 
-  // 1. Installable onEdit trigger — fires when a user manually edits a cell
+  // 1. Installable onEdit — fires when a user manually edits a cell
   ScriptApp.newTrigger('onSheetEdit')
     .forSpreadsheet(ss)
     .onEdit()
     .create();
 
-  // 2. Installable onChange trigger — fires when any cell value changes,
-  //    including formula recalculations (e.g. a date formula flipping to "Late")
+  // 2. Installable onChange — fires on any value change including formula recalcs
   ScriptApp.newTrigger('onSheetChange')
     .forSpreadsheet(ss)
     .onChange()
     .create();
 
-  // 3. Weekly digest — every Sunday at 08:00 in the spreadsheet's timezone
+  // 3. Weekly digest — every Sunday at 08:00
   ScriptApp.newTrigger('sendWeeklyDigest')
     .timeBased()
     .onWeekDay(ScriptApp.WeekDay.SUNDAY)
     .atHour(8)
     .create();
 
-  Logger.log('Triggers installed: onSheetEdit, onSheetChange, sendWeeklyDigest');
+  Logger.log('installTriggers: onSheetEdit, onSheetChange, sendWeeklyDigest installed.');
 }
 
-// Legacy alias kept so any existing time-based trigger on runDailyAlerts
-// continues to work until it is cleaned up by the next saveConfig().
-function installTrigger() {
-  installTriggers();
-}
+// Legacy alias
+function installTrigger() { installTriggers(); }
 
 function getSlackConnectionStatus() {
   var spreadsheetId = SpreadsheetApp.getActiveSpreadsheet().getId();
@@ -255,10 +262,12 @@ function getSlackOAuthUrl() {
   var scriptProps   = PropertiesService.getScriptProperties();
   var clientId      = scriptProps.getProperty('SLACK_CLIENT_ID');
 
-  // Use the stable /exec deployment URL stored at setup time, not the /dev URL
   var deployedUrl   = scriptProps.getProperty('DEPLOYED_WEBAPP_URL');
   if (!deployedUrl) {
-    throw new Error('DEPLOYED_WEBAPP_URL not set in Script Properties. Run setupDeveloperCredentials() after deploying.');
+    throw new Error(
+      'DEPLOYED_WEBAPP_URL is not set in Script Properties. ' +
+      'Run setupDeveloperCredentials() after deploying the web app.'
+    );
   }
 
   var redirectUri = deployedUrl + '?action=oauth_callback';
@@ -277,12 +286,15 @@ function disconnectSlack() {
     .deleteProperty('SLACK_TOKEN_' + spreadsheetId);
 }
 
-// Run ONCE from the Apps Script editor to store your Slack app credentials
+/**
+ * Run ONCE from the Apps Script editor after your first web app deployment.
+ * Replace the placeholder values with your real credentials.
+ */
 function setupDeveloperCredentials() {
   PropertiesService.getScriptProperties().setProperties({
     'SLACK_CLIENT_ID':     'YOUR_CLIENT_ID_HERE',
     'SLACK_CLIENT_SECRET': 'YOUR_CLIENT_SECRET_HERE',
     'DEPLOYED_WEBAPP_URL': 'https://script.google.com/macros/s/YOUR_DEPLOYMENT_ID/exec'
   });
-  Logger.log('Developer credentials saved.');
+  Logger.log('Developer credentials saved to ScriptProperties.');
 }
