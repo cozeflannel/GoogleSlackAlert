@@ -26,6 +26,12 @@ function onSheetEdit(e) {
     var docProps       = PropertiesService.getDocumentProperties();
     var installerEmail = docProps.getProperty('INSTALLER_EMAIL') || '';
 
+    // Fallback: ScriptProperties are reliable in all installable trigger contexts
+    if (!installerEmail) {
+      installerEmail = PropertiesService.getScriptProperties()
+                         .getProperty('INSTALLER_EMAIL_' + spreadsheetId) || '';
+    }
+
     // Installer editing their own sheet — no self-notification
     if (installerEmail && editorEmail.toLowerCase() === installerEmail.toLowerCase()) {
       Logger.log('onSheetEdit: edit by installer (' + editorEmail + '), skipping.');
@@ -138,7 +144,13 @@ function onSheetChange(e) {
 function runConditionCheck() {
   // ── 1. Resolve spreadsheet ID ─────────────────────────────────────────────
   var docProps      = PropertiesService.getDocumentProperties();
+  var scriptProps   = PropertiesService.getScriptProperties();
   var spreadsheetId = docProps.getProperty('SPREADSHEET_ID');
+
+  if (!spreadsheetId) {
+    // Fallback: ScriptProperties work in ALL execution contexts (triggers, doPost, time-based)
+    spreadsheetId = scriptProps.getProperty('SPREADSHEET_ID');
+  }
 
   if (!spreadsheetId) {
     // Last resort: editor / test run context
@@ -154,13 +166,22 @@ function runConditionCheck() {
     return;
   }
 
-  // ── 2. Load config ────────────────────────────────────────────────────────
-  var sheetName    = docProps.getProperty('SHEET_NAME');
-  var nameCol      = parseInt(docProps.getProperty('NAME_COL')       || '-1');
-  var emailCol     = parseInt(docProps.getProperty('EMAIL_COL')      || '-1');
-  var extraInfoCol = parseInt(docProps.getProperty('EXTRA_INFO_COL') || '-1');
-  var statusCol    = parseInt(docProps.getProperty('STATUS_COL')     || '-1');
-  var triggerValue = docProps.getProperty('TRIGGER_VALUE');
+  // ── 2. Load config ─────────────────────────────────────────────
+  // DocumentProperties are scoped to the container spreadsheet and are null
+  // in webhook (doPost) and time-based trigger contexts. ScriptProperties are
+  // always readable, so we use them as the canonical fallback.
+  var sheetName    = docProps.getProperty('SHEET_NAME')
+                  || scriptProps.getProperty('SHEET_NAME_'       + spreadsheetId);
+  var nameCol      = parseInt(docProps.getProperty('NAME_COL')
+                  || scriptProps.getProperty('NAME_COL_'         + spreadsheetId) || '-1');
+  var emailCol     = parseInt(docProps.getProperty('EMAIL_COL')
+                  || scriptProps.getProperty('EMAIL_COL_'        + spreadsheetId) || '-1');
+  var extraInfoCol = parseInt(docProps.getProperty('EXTRA_INFO_COL')
+                  || scriptProps.getProperty('EXTRA_INFO_COL_'   + spreadsheetId) || '-1');
+  var statusCol    = parseInt(docProps.getProperty('STATUS_COL')
+                  || scriptProps.getProperty('STATUS_COL_'       + spreadsheetId) || '-1');
+  var triggerValue = docProps.getProperty('TRIGGER_VALUE')
+                  || scriptProps.getProperty('TRIGGER_VALUE_'    + spreadsheetId);
 
   Logger.log('runConditionCheck: spreadsheetId=' + spreadsheetId +
              ' sheetName=' + sheetName +
@@ -193,14 +214,14 @@ function runConditionCheck() {
   }
 
   // ── 4. Scan rows ──────────────────────────────────────────────────────────
-  var scriptProps    = PropertiesService.getScriptProperties();
   var slackConnected = !!scriptProps.getProperty('SLACK_TOKEN_' + spreadsheetId);
 
   Logger.log('runConditionCheck: slackConnected=' + slackConnected +
              ' rows to scan=' + (sheet.getLastRow() - 1));
 
   var data             = sheet.getDataRange().getValues();
-  var pendingAlertsRaw = docProps.getProperty('PENDING_ALERTS');
+  var pendingAlertsRaw = docProps.getProperty('PENDING_ALERTS')
+                      || scriptProps.getProperty('PENDING_ALERTS_' + spreadsheetId);
   var pendingAlerts    = pendingAlertsRaw ? JSON.parse(pendingAlertsRaw) : [];
 
   for (var i = 1; i < data.length; i++) {

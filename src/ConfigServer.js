@@ -131,11 +131,18 @@ function saveConfig(config) {
   // ── ScriptProperties (global — keyed per spreadsheet to support multi-tenant) ──
   // SLACK_CHANNEL and INSTALLER_EMAIL are keyed so webhook handlers can look
   // them up without a DocumentProperties context (e.g. doPost, publishAppHome).
-  // Note: setProperties() does not support computed/dynamic keys, so we use
-  // individual setProperty() calls here.
+  // We also mirror sheet config here so time-based triggers and doPost can
+  // run runConditionCheck() reliably (DocumentProperties = null in those contexts).
   scriptProps.setProperty('SPREADSHEET_ID', spreadsheetId);
   scriptProps.setProperty('SLACK_CHANNEL_'    + spreadsheetId, config.SLACK_CHANNEL || '');
   scriptProps.setProperty('INSTALLER_EMAIL_'  + spreadsheetId, installerEmail);
+  scriptProps.setProperty('SHEET_NAME_'       + spreadsheetId, config.SHEET_NAME     || '');
+  scriptProps.setProperty('STATUS_COL_'       + spreadsheetId, config.STATUS_COL     || '-1');
+  scriptProps.setProperty('TRIGGER_VALUE_'    + spreadsheetId, config.TRIGGER_VALUE  || '');
+  scriptProps.setProperty('NAME_COL_'         + spreadsheetId, config.NAME_COL       || '-1');
+  scriptProps.setProperty('EMAIL_COL_'        + spreadsheetId, config.EMAIL_COL      || '-1');
+  scriptProps.setProperty('EXTRA_INFO_COL_'   + spreadsheetId, config.EXTRA_INFO_COL || '-1');
+  scriptProps.setProperty('DATE_COL_'         + spreadsheetId, config.DATE_COL       || '-1');
 
   installTriggers();
 }
@@ -271,7 +278,7 @@ function getSlackOAuthUrl() {
   }
 
   var redirectUri = deployedUrl + '?action=oauth_callback';
-  var scopes      = 'chat:write,chat:write.public,channels:read,channels:join,app_mentions:read';
+  var scopes      = 'chat:write,chat:write.public,channels:read,channels:join,app_mentions:read,im:write,im:history,incoming-webhook';
 
   return 'https://slack.com/oauth/v2/authorize' +
     '?client_id='    + encodeURIComponent(clientId) +
