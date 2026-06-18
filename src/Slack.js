@@ -27,6 +27,37 @@ function _getChannel(spreadsheetId) {
 // Rich block message with "Take Action" modal button + "View in Sheet" link
 // ─────────────────────────────────────────────────────────────────────────────
 
+function getSlackChannels(spreadsheetId) {
+  var token = _getToken(spreadsheetId);
+  var result = _fetchSlack('https://slack.com/api/conversations.list?types=public_channel,private_channel', {
+    method: 'get',
+    headers: { Authorization: 'Bearer ' + token }
+  });
+
+  if (!result.ok) {
+    Logger.log('Error fetching channels: ' + result.error);
+    return [];
+  }
+
+  return result.channels.map(function(c) {
+    return { name: '#' + c.name, id: c.id };
+  });
+}
+
+function _fetchSlack(url, options) {
+  try {
+    var response = UrlFetchApp.fetch(url, options);
+    var result   = JSON.parse(response.getContentText());
+    if (!result.ok) {
+      Logger.log('Slack API Error: ' + result.error + ' URL: ' + url);
+    }
+    return result;
+  } catch (err) {
+    Logger.log('Slack Fetch Exception: ' + err.toString() + ' URL: ' + url);
+    return { ok: false, error: err.toString() };
+  }
+}
+
 function sendSlackAlert(rowData) {
   var token    = _getToken(rowData.spreadsheetId);
   var channel  = _getChannel(rowData.spreadsheetId);
@@ -80,15 +111,13 @@ function sendSlackAlert(rowData) {
     ]
   };
 
-  var response = UrlFetchApp.fetch('https://slack.com/api/chat.postMessage', {
+  var result = _fetchSlack('https://slack.com/api/chat.postMessage', {
     method:      'post',
     headers:     { Authorization: 'Bearer ' + token },
     contentType: 'application/json',
     payload:     JSON.stringify(payload)
   });
 
-  var result = JSON.parse(response.getContentText());
-  Logger.log('sendSlackAlert response: ' + response.getContentText());
   return result.ok;
 }
 
@@ -155,15 +184,12 @@ function sendEditNotification(editData) {
     ]
   };
 
-  var response = UrlFetchApp.fetch('https://slack.com/api/chat.postMessage', {
+  var result = _fetchSlack('https://slack.com/api/chat.postMessage', {
     method:      'post',
     headers:     { Authorization: 'Bearer ' + token },
     contentType: 'application/json',
     payload:     JSON.stringify(payload)
   });
-
-  var result = JSON.parse(response.getContentText());
-  Logger.log('sendEditNotification response: ' + response.getContentText());
 
   // Store the message ts so acknowledge can post a thread reply
   if (result.ok && result.ts) {
@@ -172,18 +198,18 @@ function sendEditNotification(editData) {
   }
 
   return result.ok;
-}
+  }
 
-/**
- * Posts a threaded reply under an edit notification when the user clicks Acknowledge.
- * Called from Webhooks.js block_action handler.
- *
- * @param {string} spreadsheetId
- * @param {string} channel - Slack channel ID (from the original message payload)
- * @param {string} messageTs - timestamp of the original message (thread_ts)
- * @param {string} acknowledgedBy - Slack user ID who clicked
- */
-function postAcknowledgeThread(spreadsheetId, channel, messageTs, acknowledgedBy) {
+  /**
+  * Posts a threaded reply under an edit notification when the user clicks Acknowledge.
+  * Called from Webhooks.js block_action handler.
+  *
+  * @param {string} spreadsheetId
+  * @param {string} channel - Slack channel ID (from the original message payload)
+  * @param {string} messageTs - timestamp of the original message (thread_ts)
+  * @param {string} acknowledgedBy - Slack user ID who clicked
+  */
+  function postAcknowledgeThread(spreadsheetId, channel, messageTs, acknowledgedBy) {
   var token = _getToken(spreadsheetId);
 
   var payload = {
@@ -192,22 +218,21 @@ function postAcknowledgeThread(spreadsheetId, channel, messageTs, acknowledgedBy
     text:      '✅ Acknowledged by <@' + acknowledgedBy + '>'
   };
 
-  var response = UrlFetchApp.fetch('https://slack.com/api/chat.postMessage', {
+  var result = _fetchSlack('https://slack.com/api/chat.postMessage', {
     method:      'post',
     headers:     { Authorization: 'Bearer ' + token },
     contentType: 'application/json',
     payload:     JSON.stringify(payload)
   });
 
-  Logger.log('postAcknowledgeThread response: ' + response.getContentText());
-  return JSON.parse(response.getContentText()).ok;
-}
+  return result.ok;
+  }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// WEEKLY DIGEST
-// ─────────────────────────────────────────────────────────────────────────────
+  // ─────────────────────────────────────────────────────────────────────────────
+  // WEEKLY DIGEST
+  // ─────────────────────────────────────────────────────────────────────────────
 
-function sendWeeklyDigestSlack(spreadsheetId, digestData) {
+  function sendWeeklyDigestSlack(spreadsheetId, digestData) {
   var token    = _getToken(spreadsheetId);
   var channel  = _getChannel(spreadsheetId);
   var sheetUrl = 'https://docs.google.com/spreadsheets/d/' + spreadsheetId + '/edit';
@@ -258,22 +283,21 @@ function sendWeeklyDigestSlack(spreadsheetId, digestData) {
     ]
   };
 
-  var response = UrlFetchApp.fetch('https://slack.com/api/chat.postMessage', {
+  var result = _fetchSlack('https://slack.com/api/chat.postMessage', {
     method:      'post',
     headers:     { Authorization: 'Bearer ' + token },
     contentType: 'application/json',
     payload:     JSON.stringify(payload)
   });
 
-  Logger.log('sendWeeklyDigestSlack response: ' + response.getContentText());
-  return JSON.parse(response.getContentText()).ok;
-}
+  return result.ok;
+  }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// MODAL
-// ─────────────────────────────────────────────────────────────────────────────
+  // ─────────────────────────────────────────────────────────────────────────────
+  // MODAL
+  // ─────────────────────────────────────────────────────────────────────────────
 
-function openActionModal(triggerId, actionValue) {
+  function openActionModal(triggerId, actionValue) {
   var parsedValue = JSON.parse(actionValue);
   var token       = _getToken(parsedValue.spreadsheetId);
   var rowIndex    = parsedValue.rowIndex;
@@ -321,182 +345,131 @@ function openActionModal(triggerId, actionValue) {
     }
   };
 
-  UrlFetchApp.fetch('https://slack.com/api/views.open', {
+  _fetchSlack('https://slack.com/api/views.open', {
     method:      'post',
     headers:     { Authorization: 'Bearer ' + token },
     contentType: 'application/json',
     payload:     JSON.stringify(payload)
   });
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// APP HOME DASHBOARD
-// ─────────────────────────────────────────────────────────────────────────────
-
-function publishAppHome(userId, spreadsheetId) {
-  var token               = _getToken(spreadsheetId);
-  var scriptProps         = PropertiesService.getScriptProperties();
-  var pendingAlertsRaw    = scriptProps.getProperty('PENDING_ALERTS_' + spreadsheetId);
-  var pendingAlerts       = pendingAlertsRaw ? JSON.parse(pendingAlertsRaw) : [];
-  var sheetUrl            = 'https://docs.google.com/spreadsheets/d/' + spreadsheetId + '/edit';
-
-  var spreadsheet  = SpreadsheetApp.openById(spreadsheetId);
-  var logSheet     = spreadsheet.getSheetByName('AlertsLog');
-  var historyBlocks = [];
-  var editBlocks    = [];
-
-  if (logSheet) {
-    var data         = logSheet.getDataRange().getValues();
-    var historyCount = 0;
-
-    for (var i = data.length - 1; i > 0 && historyCount < 20; i--) {
-      var changeType = data[i][3] || '';
-
-      if (changeType === 'Manual Edit') {
-        // Recent edits section
-        editBlocks.push({
-          type: 'section',
-          text: {
-            type: 'mrkdwn',
-            text: '✏️ *' + data[i][2] + '* edited col ' + (data[i][14] || '?') +
-                  ' row ' + data[i][1] +
-                  ' on _' + data[i][11] + '_\n' +
-                  '`' + (data[i][15] || '') + '` → `' + (data[i][16] || '') + '`'
-          }
-        });
-        editBlocks.push({ type: 'divider' });
-        historyCount++;
-      } else if (data[i][7] === true) {
-        // Resolved condition alerts
-        historyCount++;
-        historyBlocks.push({
-          type: 'section',
-          text: {
-            type: 'mrkdwn',
-            text: '✅ *Row ' + data[i][1] + '* — ' + data[i][2] +
-                  ' (' + data[i][11] + ')' +
-                  '\nStatus: ' + data[i][3] +
-                  ' | Resolved by: ' + (data[i][9] || 'N/A') +
-                  '\nNotes: ' + (data[i][10] || '—')
-          }
-        });
-        historyBlocks.push({ type: 'divider' });
-      }
-    }
   }
 
-  var blocks = [
-    {
-      type: 'header',
-      text: { type: 'plain_text', text: '📋 SheetAlerts Dashboard' }
-    },
-    {
-      type: 'section',
-      text: {
-        type: 'mrkdwn',
-        text: 'Manage pending alerts and review recent activity.\n*<' + sheetUrl + '|Open Spreadsheet →>*'
-      }
-    },
-    { type: 'divider' },
-    {
-      type: 'header',
-      text: { type: 'plain_text', text: '🔴 Active Alerts' }
-    }
-  ];
+  // ─────────────────────────────────────────────────────────────────────────────
+  // APP HOME DASHBOARD
+  // ─────────────────────────────────────────────────────────────────────────────
 
-  if (pendingAlerts.length === 0) {
-    blocks.push({
-      type: 'section',
-      text: { type: 'mrkdwn', text: 'No active alerts! 🎉' }
-    });
-  } else {
-    pendingAlerts.forEach(function(alert) {
-      blocks.push({
-        type: 'section',
-        text: {
-          type: 'mrkdwn',
-          text: '*Row ' + alert.rowIndex + ':* ' + alert.clientName +
-                ' — ' + alert.sheetName +
-                '\nCondition: `' + alert.status + '`'
-        },
-        accessory: {
-          type:      'button',
-          text:      { type: 'plain_text', text: '✅ Take Action' },
-          style:     'primary',
-          action_id: 'open_action_modal',
-          value:     JSON.stringify({
-            token:         alert.token,
-            rowIndex:      alert.rowIndex,
-            spreadsheetId: alert.spreadsheetId
-          })
+  function publishAppHome(userId, spreadsheetId) {
+    var token               = _getToken(spreadsheetId);
+    var scriptProps         = PropertiesService.getScriptProperties();
+    var pendingAlertsRaw    = scriptProps.getProperty('PENDING_ALERTS_' + spreadsheetId);
+    var pendingAlerts       = pendingAlertsRaw ? JSON.parse(pendingAlertsRaw) : [];
+    var sheetUrl            = 'https://docs.google.com/spreadsheets/d/' + spreadsheetId + '/edit';
+
+    var spreadsheet  = SpreadsheetApp.openById(spreadsheetId);
+    var logSheet     = spreadsheet.getSheetByName('AlertsLog');
+
+    var stats = { sent: 0, resolved: 0, pending: pendingAlerts.length };
+    var historyBlocks = [];
+    var editBlocks    = [];
+
+    if (logSheet) {
+      var data = logSheet.getDataRange().getValues();
+      stats.sent = data.filter(function(r) { return r[3] !== 'Manual Edit'; }).length - 1; // minus header
+      stats.resolved = data.filter(function(r) { return r[7] === true; }).length;
+
+      var historyCount = 0;
+      for (var i = data.length - 1; i > 0 && historyCount < 20; i--) {
+        var changeType = data[i][3] || '';
+        if (changeType === 'Manual Edit') {
+          editBlocks.push({
+            type: 'section',
+            text: {
+              type: 'mrkdwn',
+              text: '✏️ *' + data[i][2] + '* edited *' + (data[i][14] || '?') + data[i][1] + '* (' + data[i][11] + ')\n' +
+                    '`' + (data[i][15] || '') + '` → `' + (data[i][16] || '') + '`'
+            }
+          });
+          historyCount++;
+        } else if (data[i][7] === true) {
+          historyBlocks.push({
+            type: 'section',
+            text: {
+              type: 'mrkdwn',
+              text: '✅ *Row ' + data[i][1] + '* — ' + data[i][2] +
+                    '\nStatus: ' + data[i][3] + ' | Resolved by: ' + (data[i][9] || 'N/A')
+            }
+          });
+          historyCount++;
         }
+      }
+    }
+
+    var blocks = [
+      {
+        type: 'header',
+        text: { type: 'plain_text', text: '📊 SheetAlerts Dashboard' }
+      },
+      {
+        type: 'section',
+        fields: [
+          { type: 'mrkdwn', text: '*Total Alerts Sent:*\n' + stats.sent },
+          { type: 'mrkdwn', text: '*Actions Taken:*\n' + stats.resolved },
+          { type: 'mrkdwn', text: '*Outstanding:*\n' + stats.pending }
+        ]
+      },
+      {
+        type: 'actions',
+        elements: [
+          { type: 'button', text: { type: 'plain_text', text: '📄 Open Spreadsheet' }, url: sheetUrl }
+        ]
+      },
+      { type: 'divider' },
+      { type: 'header', text: { type: 'plain_text', text: '🔴 Active Alerts' } }
+    ];
+
+    if (pendingAlerts.length === 0) {
+      blocks.push({ type: 'section', text: { type: 'mrkdwn', text: 'No active alerts! 🎉' } });
+    } else {
+      pendingAlerts.forEach(function(alert) {
+        blocks.push({
+          type: 'section',
+          text: { type: 'mrkdwn', text: '*Row ' + alert.rowIndex + ':* ' + alert.clientName + '\nCondition: `' + alert.status + '`' },
+          accessory: {
+            type: 'button',
+            text: { type: 'plain_text', text: '✅ Resolve' },
+            style: 'primary',
+            action_id: 'open_action_modal',
+            value: JSON.stringify({ token: alert.token, rowIndex: alert.rowIndex, spreadsheetId: alert.spreadsheetId })
+          }
+        });
       });
-      blocks.push({ type: 'divider' });
+    }
+
+    blocks.push({ type: 'divider' }, { type: 'header', text: { type: 'plain_text', text: '📜 Recent Activity' } });
+    blocks = blocks.concat(editBlocks.slice(0, 5)).concat(historyBlocks.slice(0, 5));
+
+    _fetchSlack('https://slack.com/api/views.publish', {
+      method: 'post',
+      headers: { Authorization: 'Bearer ' + token },
+      contentType: 'application/json',
+      payload: JSON.stringify({ user_id: userId, view: { type: 'home', blocks: blocks } })
     });
   }
+  // ─────────────────────────────────────────────────────────────────────────────
+  // CASCADE SLACK MESSAGE
+  // ─────────────────────────────────────────────────────────────────────────────
 
-  // Recent manual edits section
-  blocks.push({
-    type: 'header',
-    text: { type: 'plain_text', text: '✏️ Recent Edits by Others' }
-  });
-
-  if (editBlocks.length === 0) {
-    blocks.push({
-      type: 'section',
-      text: { type: 'mrkdwn', text: 'No edits by other users this week.' }
-    });
-  } else {
-    blocks = blocks.concat(editBlocks.slice(0, 10)); // cap at 5 edits (each = 2 blocks)
-  }
-
-  // Resolved history section
-  blocks.push({ type: 'divider' });
-  blocks.push({
-    type: 'header',
-    text: { type: 'plain_text', text: '📜 Resolved History (Last 20)' }
-  });
-
-  if (historyBlocks.length === 0) {
-    blocks.push({
-      type: 'section',
-      text: { type: 'mrkdwn', text: 'No resolved alerts yet.' }
-    });
-  } else {
-    blocks = blocks.concat(historyBlocks);
-  }
-
-  UrlFetchApp.fetch('https://slack.com/api/views.publish', {
-    method:      'post',
-    headers:     { Authorization: 'Bearer ' + token },
-    contentType: 'application/json',
-    payload:     JSON.stringify({
-      user_id: userId,
-      view:    { type: 'home', blocks: blocks }
-    })
-  });
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// CASCADE SLACK MESSAGE
-// ─────────────────────────────────────────────────────────────────────────────
-
-function sendCascadeSlackMessage(cascadeRowData, slackUserId) {
+  function sendCascadeSlackMessage(cascadeRowData, slackUserId) {
   var token    = _getToken(cascadeRowData.spreadsheetId);
   var sheetUrl = 'https://docs.google.com/spreadsheets/d/' + cascadeRowData.spreadsheetId + '/edit';
 
   // Open a DM with the specific Slack user
-  var openDmResponse = UrlFetchApp.fetch('https://slack.com/api/conversations.open', {
+  var dmResult = _fetchSlack('https://slack.com/api/conversations.open', {
     method:      'post',
     headers:     { Authorization: 'Bearer ' + token },
     contentType: 'application/json',
     payload:     JSON.stringify({ users: slackUserId })
   });
-  var dmResult = JSON.parse(openDmResponse.getContentText());
-  if (!dmResult.ok) {
-    Logger.log('Failed to open DM: ' + openDmResponse.getContentText());
-    return false;
-  }
+  if (!dmResult.ok) return false;
   var dmChannel = dmResult.channel.id;
 
   var payload = {
@@ -522,13 +495,12 @@ function sendCascadeSlackMessage(cascadeRowData, slackUserId) {
     ]
   };
 
-  var response = UrlFetchApp.fetch('https://slack.com/api/chat.postMessage', {
+  var result = _fetchSlack('https://slack.com/api/chat.postMessage', {
     method:      'post',
     headers:     { Authorization: 'Bearer ' + token },
     contentType: 'application/json',
     payload:     JSON.stringify(payload)
   });
 
-  Logger.log('sendCascadeSlackMessage response: ' + response.getContentText());
-  return JSON.parse(response.getContentText()).ok;
-}
+  return result.ok;
+  }

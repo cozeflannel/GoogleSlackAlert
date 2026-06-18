@@ -4,44 +4,52 @@
 
 /**
  * Installable onEdit trigger handler.
- *
- * For a standalone add-on, installable triggers DO receive e.source correctly
- * because the trigger is bound to a specific spreadsheet at creation time.
- *
- * Skips edits by the installer (they'd spam themselves).
- * Skips the internal AlertsLog sheet.
  */
 function onSheetEdit(e) {
   try {
-    // e.source IS available on installable onEdit triggers even in standalone scripts
     var ss            = e.source;
     var spreadsheetId = ss.getId();
-
-    var editorEmail = e.user ? e.user.email : '';
-    if (!editorEmail) {
-      Logger.log('onSheetEdit: anonymous edit, skipping.');
-      return;
-    }
-
-    var docProps       = PropertiesService.getDocumentProperties();
-    var installerEmail = docProps.getProperty('INSTALLER_EMAIL') || '';
-
-    // Fallback: ScriptProperties are reliable in all installable trigger contexts
-    if (!installerEmail) {
-      installerEmail = PropertiesService.getScriptProperties()
-                         .getProperty('INSTALLER_EMAIL_' + spreadsheetId) || '';
-    }
-
-    // Installer editing their own sheet — no self-notification
-    if (installerEmail && editorEmail.toLowerCase() === installerEmail.toLowerCase()) {
-      Logger.log('onSheetEdit: edit by installer (' + editorEmail + '), skipping.');
-      return;
-    }
-
-    var range     = e.range;
-    var sheetName = range.getSheet().getName();
+    var range         = e.range;
+    var sheet         = range.getSheet();
+    var sheetName     = sheet.getName();
 
     if (sheetName === 'AlertsLog') return;
+
+    // ── 1. Handle Auto-Timestamp Logic ──────────────────────────────────────
+    var scriptProps = PropertiesService.getScriptProperties();
+    var atTrigCol   = parseInt(scriptProps.getProperty('AT_TRIG_COL_' + spreadsheetId) || '-1');
+    var atDateCol   = parseInt(scriptProps.getProperty('AT_COL_'      + spreadsheetId) || '-1');
+    var atVal       = scriptProps.getProperty('AT_VAL_'               + spreadsheetId);
+
+    if (atTrigCol >= 0 && atDateCol >= 0 && range.getColumn() === (atTrigCol + 1)) {
+      var editValue = String(e.value).trim();
+      var dateCell  = sheet.getRange(range.getRow(), atDateCol + 1);
+      
+      if (editValue === atVal) {
+        if (dateCell.getValue() === '') {
+          dateCell.setValue(new Date());
+          Logger.log('onSheetEdit: Auto-timestamped row ' + range.getRow());
+        }
+      } else if (editValue === '') {
+        dateCell.clearContent();
+      }
+    }
+
+    // ── 2. Standard Alert Notification Logic (Skip for installer) ───────────
+    var editorEmail = e.user ? e.user.email : '';
+    if (!editorEmail) return;
+
+    var _docPropsRaw   = PropertiesService.getDocumentProperties();
+    var docProps       = _docPropsRaw || { getProperty: function() { return null; } };
+    var installerEmail = docProps.getProperty('INSTALLER_EMAIL') || '';
+
+    if (!installerEmail) {
+      installerEmail = scriptProps.getProperty('INSTALLER_EMAIL_' + spreadsheetId) || '';
+    }
+
+    if (installerEmail && editorEmail.toLowerCase() === installerEmail.toLowerCase()) {
+      return;
+    }
 
     var editData = {
       editorEmail:   editorEmail,
@@ -55,77 +63,38 @@ function onSheetEdit(e) {
       timestamp:     new Date()
     };
 
-    Logger.log('onSheetEdit: editor=' + editorEmail +
-               ' cell=' + editData.columnLetter + editData.row +
-               ' sheet=' + sheetName +
-               ' spreadsheetId=' + spreadsheetId);
-
-    var scriptProps    = PropertiesService.getScriptProperties();
     var slackConnected = !!scriptProps.getProperty('SLACK_TOKEN_' + spreadsheetId);
 
     var slackResult = false;
     if (slackConnected) {
-      try {
-        slackResult = sendEditNotification(editData);
-        Logger.log('onSheetEdit: Slack result=' + slackResult);
-      } catch (slackErr) {
-        Logger.log('onSheetEdit: Slack error: ' + slackErr.toString());
-      }
-    } else {
-      Logger.log('onSheetEdit: Slack not connected for spreadsheetId=' + spreadsheetId);
+      try { slackResult = sendEditNotification(editData); } catch (slackErr) {}
     }
 
     var emailResult = false;
     if (installerEmail) {
-      try {
-        emailResult = sendGmailEditAlert(editData, installerEmail);
-        Logger.log('onSheetEdit: email result=' + emailResult);
-      } catch (mailErr) {
-        Logger.log('onSheetEdit: email error: ' + mailErr.toString());
-      }
+      try { emailResult = sendGmailEditAlert(editData, installerEmail); } catch (mailErr) {}
     }
 
     var logSheet = ss.getSheetByName('AlertsLog') || _createLogSheet(ss);
     logSheet.appendRow([
-      new Date(),
-      editData.row,
-      editorEmail,
-      'Manual Edit',
-      generateUUID(),
-      emailResult,
-      slackResult,
-      false, '', '', '',
-      sheetName,
-      false, '',
-      editData.columnLetter,
-      editData.oldValue,
-      editData.newValue
+      new Date(), editData.row, editorEmail, 'Manual Edit', generateUUID(),
+      emailResult, slackResult, false, '', '', '', sheetName, false, '',
+      editData.columnLetter, editData.oldValue, editData.newValue
     ]);
 
   } catch (err) {
-    Logger.log('onSheetEdit UNHANDLED ERROR: ' + err.toString() + '\n' + err.stack);
+    Logger.log('onSheetEdit ERROR: ' + err.toString());
   }
 }
 
 /**
  * Installable onChange trigger handler.
- *
- * IMPORTANT — standalone script limitation:
- * The onChange event object does NOT reliably carry e.source in a standalone
- * add-on. We therefore resolve the spreadsheet from DocumentProperties
- * (SPREADSHEET_ID), which is always correctly scoped to the container
- * spreadsheet because DocumentProperties are per-document.
- *
- * This is safe because a single installed copy of the add-on has exactly one
- * DocumentProperties store — the one for the sheet it was installed on.
  */
 function onSheetChange(e) {
   try {
-    Logger.log('onSheetChange: fired. changeType=' +
-               (e && e.changeType ? e.changeType : 'unknown'));
     runConditionCheck();
   } catch (err) {
-    Logger.log('onSheetChange UNHANDLED ERROR: ' + err.toString() + '\n' + err.stack);
+    Logger.log('onSheetChange ERROR: ' + err.toString());
   }
 }
 
@@ -133,153 +102,97 @@ function onSheetChange(e) {
 // CONDITION CHECK
 // ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * Scans the monitored sheet for rows matching the trigger condition and fires
- * Slack + email alerts for newly matching rows.
- *
- * Spreadsheet resolution order:
- *   1. DocumentProperties.SPREADSHEET_ID  ← always correct for a given install
- *   2. Try SpreadsheetApp.getActiveSpreadsheet() as last resort (editor runs only)
- */
 function runConditionCheck() {
-  // ── 1. Resolve spreadsheet ID ─────────────────────────────────────────────
-  var docProps      = PropertiesService.getDocumentProperties();
+  var _docPropsRaw  = PropertiesService.getDocumentProperties();
+  var docProps      = _docPropsRaw || { getProperty: function() { return null; } };
   var scriptProps   = PropertiesService.getScriptProperties();
-  var spreadsheetId = docProps.getProperty('SPREADSHEET_ID');
+  var spreadsheetId = docProps.getProperty('SPREADSHEET_ID') || scriptProps.getProperty('SPREADSHEET_ID');
 
   if (!spreadsheetId) {
-    // Fallback: ScriptProperties work in ALL execution contexts (triggers, doPost, time-based)
-    spreadsheetId = scriptProps.getProperty('SPREADSHEET_ID');
-  }
-
-  if (!spreadsheetId) {
-    // Last resort: editor / test run context
     try {
       var active = SpreadsheetApp.getActiveSpreadsheet();
       if (active) spreadsheetId = active.getId();
-    } catch (e) { /* no active spreadsheet */ }
+    } catch (e) {}
   }
 
-  if (!spreadsheetId) {
-    Logger.log('runConditionCheck: SPREADSHEET_ID not set. ' +
-               'Open the SheetAlerts sidebar and click Save Configuration.');
-    return;
-  }
+  if (!spreadsheetId) return;
 
-  // ── 2. Load config ─────────────────────────────────────────────
-  // DocumentProperties are scoped to the container spreadsheet and are null
-  // in webhook (doPost) and time-based trigger contexts. ScriptProperties are
-  // always readable, so we use them as the canonical fallback.
-  var sheetName    = docProps.getProperty('SHEET_NAME')
-                  || scriptProps.getProperty('SHEET_NAME_'       + spreadsheetId);
-  var nameCol      = parseInt(docProps.getProperty('NAME_COL')
-                  || scriptProps.getProperty('NAME_COL_'         + spreadsheetId) || '-1');
-  var emailCol     = parseInt(docProps.getProperty('EMAIL_COL')
-                  || scriptProps.getProperty('EMAIL_COL_'        + spreadsheetId) || '-1');
-  var extraInfoCol = parseInt(docProps.getProperty('EXTRA_INFO_COL')
-                  || scriptProps.getProperty('EXTRA_INFO_COL_'   + spreadsheetId) || '-1');
-  var statusCol    = parseInt(docProps.getProperty('STATUS_COL')
-                  || scriptProps.getProperty('STATUS_COL_'       + spreadsheetId) || '-1');
-  var triggerValue = docProps.getProperty('TRIGGER_VALUE')
-                  || scriptProps.getProperty('TRIGGER_VALUE_'    + spreadsheetId);
+  var sheetName      = docProps.getProperty('SHEET_NAME') || scriptProps.getProperty('SHEET_NAME_' + spreadsheetId);
+  var nameCol        = parseInt(docProps.getProperty('NAME_COL') || scriptProps.getProperty('NAME_COL_' + spreadsheetId) || '-1');
+  var emailCol       = parseInt(docProps.getProperty('EMAIL_COL') || scriptProps.getProperty('EMAIL_COL_' + spreadsheetId) || '-1');
+  var statusCol      = parseInt(docProps.getProperty('STATUS_COL') || scriptProps.getProperty('STATUS_COL_' + spreadsheetId) || '-1');
+  var triggerValue   = docProps.getProperty('TRIGGER_VALUE') || scriptProps.getProperty('TRIGGER_VALUE_' + spreadsheetId);
+  var dueDateCol     = parseInt(docProps.getProperty('DUE_DATE_COL') || '-1');
+  var finalStatusCol = parseInt(docProps.getProperty('FINAL_STATUS_COL') || '-1');
+  var tsCol          = parseInt(docProps.getProperty('AUTO_TIMESTAMP_COL') || '-1');
 
-  Logger.log('runConditionCheck: spreadsheetId=' + spreadsheetId +
-             ' sheetName=' + sheetName +
-             ' statusCol=' + statusCol +
-             ' triggerValue=' + triggerValue);
-
-  if (!sheetName) {
-    Logger.log('runConditionCheck: SHEET_NAME not configured.');
-    return;
-  }
-  if (statusCol === -1 || !triggerValue) {
-    Logger.log('runConditionCheck: alert condition not fully configured.');
-    return;
-  }
-
-  // ── 3. Open spreadsheet and sheet ────────────────────────────────────────
   var ss;
-  try {
-    ss = SpreadsheetApp.openById(spreadsheetId);
-  } catch (openErr) {
-    Logger.log('runConditionCheck: cannot open spreadsheet ' +
-               spreadsheetId + ' — ' + openErr.toString());
-    return;
-  }
-
+  try { ss = SpreadsheetApp.openById(spreadsheetId); } catch (e) { return; }
   var sheet = ss.getSheetByName(sheetName);
-  if (!sheet) {
-    Logger.log('runConditionCheck: sheet "' + sheetName + '" not found.');
-    return;
-  }
+  if (!sheet) return;
 
-  // ── 4. Scan rows ──────────────────────────────────────────────────────────
   var slackConnected = !!scriptProps.getProperty('SLACK_TOKEN_' + spreadsheetId);
-
-  Logger.log('runConditionCheck: slackConnected=' + slackConnected +
-             ' rows to scan=' + (sheet.getLastRow() - 1));
-
-  var data             = sheet.getDataRange().getValues();
-  var pendingAlertsRaw = docProps.getProperty('PENDING_ALERTS')
-                      || scriptProps.getProperty('PENDING_ALERTS_' + spreadsheetId);
+  var data           = sheet.getDataRange().getValues();
+  var today          = new Date();
+  
+  var pendingAlertsRaw = docProps.getProperty('PENDING_ALERTS') || scriptProps.getProperty('PENDING_ALERTS_' + spreadsheetId);
   var pendingAlerts    = pendingAlertsRaw ? JSON.parse(pendingAlertsRaw) : [];
 
   for (var i = 1; i < data.length; i++) {
+    var rowIndex  = i + 1;
     var cellValue = String(data[i][statusCol]).trim();
     var trigger   = String(triggerValue).trim();
+    
+    var isTriggerMatched = (statusCol >= 0 && cellValue === trigger);
+    var isUrgent         = false;
 
-    if (cellValue !== trigger) continue;
+    if (finalStatusCol >= 0) {
+      var currentStatus = '';
+      var dueDate       = (dueDateCol >= 0) ? data[i][dueDateCol] : null;
+      var completionDate = (tsCol >= 0) ? data[i][tsCol] : null;
+
+      if (completionDate instanceof Date) {
+        if (dueDate instanceof Date) {
+          currentStatus = (completionDate <= dueDate) ? 'On Time' : 'Late';
+        } else {
+          currentStatus = 'Completed';
+        }
+      } else {
+        if (dueDate instanceof Date && today > dueDate && cellValue !== trigger) {
+          currentStatus = 'Urgent Action Needed';
+          isUrgent      = true;
+        }
+      }
+      
+      if (currentStatus !== String(data[i][finalStatusCol])) {
+        sheet.getRange(rowIndex, finalStatusCol + 1).setValue(currentStatus);
+      }
+    }
+
+    if (!isTriggerMatched && !isUrgent) continue;
 
     var rowData = {
-      rowId:         data[i][0],
-      clientName:    nameCol      >= 0 ? data[i][nameCol]      : 'Unknown',
-      extraInfo:     extraInfoCol >= 0 ? data[i][extraInfoCol] : '',
-      status:        data[i][statusCol],
-      email:         emailCol     >= 0 ? data[i][emailCol]     : '',
-      rowIndex:      i + 1,
+      clientName:    nameCol >= 0 ? data[i][nameCol] : 'Unknown',
+      status:        isUrgent ? 'Urgent Action Needed' : cellValue,
+      email:         emailCol >= 0 ? data[i][emailCol] : '',
+      rowIndex:      rowIndex,
       spreadsheetId: spreadsheetId,
       sheetName:     sheetName
     };
 
-    var existingToken = getExistingUnresolvedToken(ss, rowData.rowIndex, sheetName);
-    if (existingToken) {
-      Logger.log('runConditionCheck: row ' + rowData.rowIndex +
-                 ' already has unresolved alert, skipping.');
-      continue;
-    }
-
-    var cascadeToken = getCascadeTokenForRow(ss, sheetName, rowData.rowIndex);
-    if (cascadeToken) {
-      Logger.log('runConditionCheck: row ' + rowData.rowIndex +
-                 ' already notified via cascade, skipping.');
-      continue;
-    }
+    var existingToken = getExistingUnresolvedToken(ss, rowIndex, sheetName);
+    if (existingToken) continue;
 
     rowData.token = generateUUID();
 
-    Logger.log('runConditionCheck: FIRING alert for row ' + rowData.rowIndex +
-               ' name=' + rowData.clientName + ' status=' + rowData.status);
-
     var slackResult = false;
     if (slackConnected) {
-      try {
-        slackResult = sendSlackAlert(rowData);
-        Logger.log('runConditionCheck: Slack alert result=' + slackResult);
-      } catch (slackErr) {
-        Logger.log('runConditionCheck: Slack error on row ' +
-                   rowData.rowIndex + ': ' + slackErr.toString());
-      }
+      try { slackResult = sendSlackAlert(rowData); } catch (e) {}
     }
 
     var emailResult = false;
     if (rowData.email) {
-      try {
-        emailResult = sendGmailAlert(rowData);
-        Logger.log('runConditionCheck: email result=' + emailResult);
-      } catch (mailErr) {
-        Logger.log('runConditionCheck: email error on row ' +
-                   rowData.rowIndex + ': ' + mailErr.toString());
-      }
+      try { emailResult = sendGmailAlert(rowData); } catch (e) {}
     }
 
     logAlert(ss, rowData, emailResult, slackResult, sheetName, false);
@@ -287,13 +200,11 @@ function runConditionCheck() {
   }
 
   var alertsJson = JSON.stringify(pendingAlerts);
-  docProps.setProperty('PENDING_ALERTS', alertsJson);
+  if (_docPropsRaw) _docPropsRaw.setProperty('PENDING_ALERTS', alertsJson);
   scriptProps.setProperty('PENDING_ALERTS_' + spreadsheetId, alertsJson);
-
-  Logger.log('runConditionCheck: complete.');
 }
 
-// Legacy alias — keeps any old time-based trigger on runDailyAlerts working
+// Legacy alias
 function runDailyAlerts() { runConditionCheck(); }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -301,32 +212,24 @@ function runDailyAlerts() { runConditionCheck(); }
 // ─────────────────────────────────────────────────────────────────────────────
 
 function sendWeeklyDigest() {
-  var docProps      = PropertiesService.getDocumentProperties();
+  var _docPropsRaw  = PropertiesService.getDocumentProperties();
+  var docProps      = _docPropsRaw || { getProperty: function() { return null; } };
   var spreadsheetId = docProps.getProperty('SPREADSHEET_ID');
 
-  if (!spreadsheetId) {
-    Logger.log('sendWeeklyDigest: SPREADSHEET_ID not set.');
-    return;
-  }
+  if (!spreadsheetId) return;
 
   var scriptProps    = PropertiesService.getScriptProperties();
   var slackConnected = !!scriptProps.getProperty('SLACK_TOKEN_' + spreadsheetId);
 
-  // Always run a condition check first to catch any new rows
   runConditionCheck();
 
-  if (!slackConnected) {
-    Logger.log('sendWeeklyDigest: Slack not connected, skipping digest post.');
-    return;
-  }
+  if (!slackConnected) return;
 
   var spreadsheet = SpreadsheetApp.openById(spreadsheetId);
   var logSheet    = spreadsheet.getSheetByName('AlertsLog');
 
   if (!logSheet) {
-    sendWeeklyDigestSlack(spreadsheetId, {
-      totalAlerts: 0, resolved: 0, pending: 0, manualEdits: 0, newEditors: []
-    });
+    sendWeeklyDigestSlack(spreadsheetId, { totalAlerts: 0, resolved: 0, pending: 0, manualEdits: 0, newEditors: [] });
     return;
   }
 
@@ -366,7 +269,8 @@ function sendWeeklyDigest() {
 // ─────────────────────────────────────────────────────────────────────────────
 
 function fireCascadeIfConfigured(spreadsheetId, resolvedRowData) {
-  var docProps      = PropertiesService.getDocumentProperties();
+  var _docPropsRaw  = PropertiesService.getDocumentProperties();
+  var docProps      = _docPropsRaw || { getProperty: function() { return null; } };
   var downstreamRaw = docProps.getProperty('DOWNSTREAM_CONFIG');
   if (!downstreamRaw) return;
 
@@ -375,28 +279,16 @@ function fireCascadeIfConfigured(spreadsheetId, resolvedRowData) {
 
   var spreadsheet     = SpreadsheetApp.openById(spreadsheetId);
   var downstreamSheet = spreadsheet.getSheetByName(downstream.sheetName);
-  if (!downstreamSheet) {
-    Logger.log('fireCascadeIfConfigured: downstream sheet "' +
-               downstream.sheetName + '" not found.');
-    return;
-  }
+  if (!downstreamSheet) return;
 
   var data = downstreamSheet.getDataRange().getValues();
 
   for (var i = 1; i < data.length; i++) {
-    if (String(data[i][downstream.watchCol]).trim() !==
-        String(downstream.triggerValue).trim()) continue;
+    if (String(data[i][downstream.watchCol]).trim() !== String(downstream.triggerValue).trim()) continue;
 
     var rowIndex = i + 1;
-
-    if (getExistingUnresolvedToken(spreadsheet, rowIndex, downstream.sheetName)) {
-      Logger.log('fireCascadeIfConfigured: row ' + rowIndex + ' already has alert, skipping.');
-      continue;
-    }
-    if (getCascadeTokenForRow(spreadsheet, downstream.sheetName, rowIndex)) {
-      Logger.log('fireCascadeIfConfigured: row ' + rowIndex + ' already cascaded, skipping.');
-      continue;
-    }
+    if (getExistingUnresolvedToken(spreadsheet, rowIndex, downstream.sheetName)) continue;
+    if (getCascadeTokenForRow(spreadsheet, downstream.sheetName, rowIndex)) continue;
 
     var cascadeRowData = {
       clientName:     downstream.nameCol >= 0 ? data[i][downstream.nameCol] : 'Unknown',
@@ -410,17 +302,11 @@ function fireCascadeIfConfigured(spreadsheetId, resolvedRowData) {
       cascadeMessage: downstream.cascadeMessage || 'Updated by ' + resolvedRowData.sheetName
     };
 
-    var slackConnected = !!PropertiesService.getScriptProperties()
-                            .getProperty('SLACK_TOKEN_' + spreadsheetId);
-
-    var slackResult = (slackConnected && downstream.notifySlackUser)
-      ? sendCascadeSlackMessage(cascadeRowData, downstream.notifySlackUser)
-      : false;
-
+    var slackConnected = !!PropertiesService.getScriptProperties().getProperty('SLACK_TOKEN_' + spreadsheetId);
+    var slackResult = (slackConnected && downstream.notifySlackUser) ? sendCascadeSlackMessage(cascadeRowData, downstream.notifySlackUser) : false;
     var emailResult = cascadeRowData.email ? sendGmailAlert(cascadeRowData) : false;
 
-    logAlert(spreadsheet, cascadeRowData, emailResult, slackResult,
-             downstream.sheetName, true);
+    logAlert(spreadsheet, cascadeRowData, emailResult, slackResult, downstream.sheetName, true);
   }
 }
 
@@ -434,10 +320,7 @@ function getExistingUnresolvedToken(spreadsheet, rowIndex, sheetName) {
 
   var data = logSheet.getDataRange().getValues();
   for (var i = data.length - 1; i > 0; i--) {
-    if (data[i][11] === sheetName &&
-        data[i][1]  === rowIndex  &&
-        data[i][12] !== true      &&
-        data[i][7]  !== true) {
+    if (data[i][11] === sheetName && data[i][1] === rowIndex && data[i][12] !== true && data[i][7] !== true) {
       return data[i][4];
     }
   }
@@ -450,10 +333,7 @@ function getCascadeTokenForRow(spreadsheet, sheetName, rowIndex) {
 
   var data = logSheet.getDataRange().getValues();
   for (var i = data.length - 1; i > 0; i--) {
-    if (data[i][11] === sheetName &&
-        data[i][1]  === rowIndex  &&
-        data[i][12] === true      &&
-        data[i][7]  !== true) {
+    if (data[i][11] === sheetName && data[i][1] === rowIndex && data[i][12] === true && data[i][7] !== true) {
       return data[i][4];
     }
   }
@@ -463,18 +343,9 @@ function getCascadeTokenForRow(spreadsheet, sheetName, rowIndex) {
 function logAlert(spreadsheet, rowData, emailSent, slackSent, sheetName, isCascade) {
   var logSheet = spreadsheet.getSheetByName('AlertsLog') || _createLogSheet(spreadsheet);
   logSheet.appendRow([
-    new Date(),
-    rowData.rowIndex,
-    rowData.clientName,
-    rowData.status,
-    rowData.token,
-    emailSent,
-    slackSent,
-    false, '', '', '',
-    sheetName           || '',
-    isCascade           || false,
-    rowData.cascadeFrom || '',
-    '', '', ''
+    new Date(), rowData.rowIndex, rowData.clientName, rowData.status, rowData.token,
+    emailSent, slackSent, false, '', '', '', sheetName || '', isCascade || false,
+    rowData.cascadeFrom || '', '', '', ''
   ]);
 }
 
@@ -489,9 +360,7 @@ function _createLogSheet(spreadsheet) {
   return logSheet;
 }
 
-function generateUUID() {
-  return Utilities.getUuid();
-}
+function generateUUID() { return Utilities.getUuid(); }
 
 function columnToLetter(col) {
   var letter = '';
@@ -503,18 +372,15 @@ function columnToLetter(col) {
   return letter;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// DEBUG — run manually from the Apps Script editor to verify wiring
-// ─────────────────────────────────────────────────────────────────────────────
 function debugConfig() {
-  var docProps  = PropertiesService.getDocumentProperties().getProperties();
-  var sp        = PropertiesService.getScriptProperties();
-  var ssId      = docProps['SPREADSHEET_ID'];
+  var _docPropsRaw = PropertiesService.getDocumentProperties();
+  var docProps     = _docPropsRaw ? _docPropsRaw.getProperties() : {};
+  var sp           = PropertiesService.getScriptProperties();
+  var ssId         = docProps['SPREADSHEET_ID'];
 
   Logger.log('=== DocumentProperties ===');
   Object.keys(docProps).sort().forEach(function(k) {
-    var v = (k.indexOf('TOKEN') !== -1 || k.indexOf('SECRET') !== -1)
-      ? '***hidden***' : docProps[k];
+    var v = (k.indexOf('TOKEN') !== -1 || k.indexOf('SECRET') !== -1) ? '***hidden***' : docProps[k];
     Logger.log('  ' + k + ' = ' + v);
   });
 
@@ -525,18 +391,13 @@ function debugConfig() {
 
   if (ssId) {
     Logger.log('\n=== Per-spreadsheet ScriptProperties ===');
-    Logger.log('  SLACK_TOKEN_'   + ssId + ' = ' +
-      (sp.getProperty('SLACK_TOKEN_' + ssId) ? 'SET ✅' : 'NOT SET ❌'));
-    Logger.log('  SLACK_CHANNEL_' + ssId + ' = ' +
-      (sp.getProperty('SLACK_CHANNEL_' + ssId) || '(not set)'));
-    Logger.log('  INSTALLER_EMAIL_' + ssId + ' = ' +
-      (sp.getProperty('INSTALLER_EMAIL_' + ssId) || '(not set)'));
+    Logger.log('  SLACK_TOKEN_'   + ssId + ' = ' + (sp.getProperty('SLACK_TOKEN_' + ssId) ? 'SET ✅' : 'NOT SET ❌'));
+    Logger.log('  SLACK_CHANNEL_' + ssId + ' = ' + (sp.getProperty('SLACK_CHANNEL_' + ssId) || '(not set)'));
+    Logger.log('  INSTALLER_EMAIL_' + ssId + ' = ' + (sp.getProperty('INSTALLER_EMAIL_' + ssId) || '(not set)'));
   }
 
   Logger.log('\n=== Installed triggers ===');
   ScriptApp.getProjectTriggers().forEach(function(t) {
-    Logger.log('  handler=' + t.getHandlerFunction() +
-               ' type='    + t.getEventType() +
-               ' sourceId=' + t.getTriggerSourceId());
+    Logger.log('  handler=' + t.getHandlerFunction() + ' type=' + t.getEventType() + ' sourceId=' + t.getTriggerSourceId());
   });
 }

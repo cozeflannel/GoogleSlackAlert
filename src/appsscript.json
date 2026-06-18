@@ -9,11 +9,51 @@
   },
   "oauthScopes": [
     "https://www.googleapis.com/auth/spreadsheets",
-    "https://www.googleapis.com/auth/drive",
     "https://www.googleapis.com/auth/script.external_request",
     "https://www.googleapis.com/auth/userinfo.email",
     "https://www.googleapis.com/auth/gmail.send",
-    "https://www.googleapis.com/auth/script.container.ui",
-    "https://www.googleapis.com/auth/script.scriptapp"
-  ]
+    "https://www.googleapis.com/auth/script.scriptapp",
+    "https://www.googleapis.com/auth/script.locale"
+  ],
+  "urlFetchWhitelist": [
+    "https://slack.com/",
+    "https://script.google.com/",
+    "https://apjftvnmskckrhgrdpbk.supabase.co/"
+  ],
+  "addOns": {
+    "common": {
+      "name": "SheetAlerts",
+      "logoUrl": "https://www.gstatic.com/images/branding/product/1x/sheets_64dp.png",
+      "useLocaleFromApp": true,
+      "homepageTrigger": {
+        "runFunction": "onHomepage",
+        "enabled": true
+      },
+      "layoutProperties": {
+        "primaryColor": "#0052cc",
+        "secondaryColor": "#f4f5f7"
+      },
+      "universalActions": [
+        {
+          "label": "Open Spreadsheet",
+          "openLink": "https://docs.google.com/spreadsheets"
+        }
+      ]
+    },
+    "sheets": {
+      "homepageTrigger": {
+        "runFunction": "onHomepage"
+      }
+    },
+    "gmail": {
+      "homepageTrigger": {
+        "runFunction": "onHomepage"
+      }
+    },
+    "calendar": {
+      "homepageTrigger": {
+        "runFunction": "onHomepage"
+      }
+    }
+  }
 }

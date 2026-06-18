@@ -1,37 +1,37 @@
 function sendGmailAlert(rowData) {
-  var scriptUrl = ScriptApp.getService().getUrl();
-  var actionUrl = scriptUrl +
-    "?action=resolve" +
-    "&token="         + encodeURIComponent(rowData.token) +
-    "&rowIndex="      + rowData.rowIndex +
-    "&spreadsheetId=" + rowData.spreadsheetId;
-
-  var subject = "[Action Required] " + rowData.clientName + " — " + rowData.status;
-
-  // Include cascade context in the email if this was triggered by an upstream sheet
-  var cascadeNote = rowData.cascadeMessage
-    ? "<p style='background:#fff8e1;border-left:4px solid #f9a825;padding:8px 12px;" +
-      "margin-bottom:12px;'><b>Context:</b> " + rowData.cascadeMessage + "</p>"
-    : "";
-
-  var htmlBody =
-    "<h2>Alert: Action Required</h2>" +
-    cascadeNote +
-    "<p>The following item requires your attention:</p>" +
-    "<table border='1' cellpadding='5' style='border-collapse:collapse;'>" +
-    "<tr><td><b>Sheet</b></td><td>"       + (rowData.sheetName  || '') + "</td></tr>" +
-    "<tr><td><b>Row</b></td><td>"         + rowData.rowIndex           + "</td></tr>" +
-    "<tr><td><b>Name</b></td><td>"        + rowData.clientName         + "</td></tr>" +
-    "<tr><td><b>Status</b></td><td>"      + rowData.status             + "</td></tr>" +
-    "</table><br/>" +
-    "<a href='" + actionUrl + "' style='background-color:#0052cc;color:white;" +
-    "padding:10px 20px;text-decoration:none;border-radius:5px;'>Take Action</a>";
-
   try {
+    var scriptUrl = ScriptApp.getService().getUrl();
+    var actionUrl = scriptUrl +
+      "?action=resolve" +
+      "&token="         + encodeURIComponent(rowData.token) +
+      "&rowIndex="      + rowData.rowIndex +
+      "&spreadsheetId=" + rowData.spreadsheetId;
+
+    var subject = "[Action Required] " + rowData.clientName + " — " + rowData.status;
+
+    // Include cascade context in the email if this was triggered by an upstream sheet
+    var cascadeNote = rowData.cascadeMessage
+      ? "<p style='background:#fff8e1;border-left:4px solid #f9a825;padding:8px 12px;" +
+        "margin-bottom:12px;'><b>Context:</b> " + rowData.cascadeMessage + "</p>"
+      : "";
+
+    var htmlBody =
+      "<h2>Alert: Action Required</h2>" +
+      cascadeNote +
+      "<p>The following item requires your attention:</p>" +
+      "<table border='1' cellpadding='5' style='border-collapse:collapse;'>" +
+      "<tr><td><b>Sheet</b></td><td>"       + (rowData.sheetName  || '') + "</td></tr>" +
+      "<tr><td><b>Row</b></td><td>"         + rowData.rowIndex           + "</td></tr>" +
+      "<tr><td><b>Name</b></td><td>"        + rowData.clientName         + "</td></tr>" +
+      "<tr><td><b>Status</b></td><td>"      + rowData.status             + "</td></tr>" +
+      "</table><br/>" +
+      "<a href='" + actionUrl + "' style='background-color:#0052cc;color:white;" +
+      "padding:10px 20px;text-decoration:none;border-radius:5px;'>Take Action</a>";
+
     MailApp.sendEmail({ to: rowData.email, subject: subject, htmlBody: htmlBody });
     return true;
   } catch (err) {
-    Logger.log("Failed to send email: " + err.toString());
+    Logger.log("Failed to send Gmail alert: " + err.toString());
     return false;
   }
 }
@@ -120,10 +120,25 @@ function getActionFormHtml(rowData) {
 }
 
 function resolveAlert(token, rowIndex, newStatus, notes, providedSpreadsheetId) {
-  var docProps      = PropertiesService.getDocumentProperties();
-  var spreadsheetId = providedSpreadsheetId || docProps.getProperty('SPREADSHEET_ID');
-  var sheetName     = docProps.getProperty('SHEET_NAME');
-  var statusCol     = parseInt(docProps.getProperty('STATUS_COL') || '-1') + 1;
+  var _docPropsRaw  = PropertiesService.getDocumentProperties();
+  var docProps      = _docPropsRaw || { getProperty: function() { return null; } };
+  var scriptProps   = PropertiesService.getScriptProperties();
+
+  var spreadsheetId = providedSpreadsheetId || docProps.getProperty('SPREADSHEET_ID')
+                   || scriptProps.getProperty('SPREADSHEET_ID');
+
+  var sheetName     = docProps.getProperty('SHEET_NAME')
+                   || scriptProps.getProperty('SHEET_NAME_' + spreadsheetId);
+
+  var statusColStr  = docProps.getProperty('STATUS_COL')
+                   || scriptProps.getProperty('STATUS_COL_' + spreadsheetId);
+  var statusCol     = parseInt(statusColStr || '-1') + 1;
+
+  if (!spreadsheetId || !sheetName || statusCol <= 0) {
+    Logger.log('resolveAlert: Missing config. ssId=' + spreadsheetId +
+               ' sheet=' + sheetName + ' col=' + statusCol);
+    return { success: false, error: 'Configuration missing for this spreadsheet.' };
+  }
 
   var spreadsheet = SpreadsheetApp.openById(spreadsheetId);
   var sheet       = spreadsheet.getSheetByName(sheetName);
@@ -168,14 +183,18 @@ function resolveAlert(token, rowIndex, newStatus, notes, providedSpreadsheetId) 
   logSheet.getRange(logRowIndex, 11).setValue(notes || '');
 
   // Update pending alerts in both property stores
-  var pendingAlertsRaw = docProps.getProperty('PENDING_ALERTS');
+  var pendingAlertsRaw = docProps.getProperty('PENDING_ALERTS')
+                      || scriptProps.getProperty('PENDING_ALERTS_' + spreadsheetId);
+
   if (pendingAlertsRaw) {
     var updated     = JSON.parse(pendingAlertsRaw)
                         .filter(function(a) { return a.token !== token; });
     var updatedJson = JSON.stringify(updated);
-    docProps.setProperty('PENDING_ALERTS', updatedJson);
-    PropertiesService.getScriptProperties()
-      .setProperty('PENDING_ALERTS_' + spreadsheetId, updatedJson);
+
+    if (_docPropsRaw) {
+      _docPropsRaw.setProperty('PENDING_ALERTS', updatedJson);
+    }
+    scriptProps.setProperty('PENDING_ALERTS_' + spreadsheetId, updatedJson);
   }
 
   // Fire cascade to downstream sheet if configured

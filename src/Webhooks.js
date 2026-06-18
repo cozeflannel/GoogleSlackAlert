@@ -59,16 +59,52 @@ function doPost(e) {
 
       var privateMetadata = JSON.parse(payload.view.private_metadata);
       var values          = payload.view.state.values;
-      var newStatus       = values.status_block.status_select.selected_option.value;
-      var notes           = values.notes_block && values.notes_block.notes_input
-                              ? values.notes_block.notes_input.value : '';
+      var spreadsheetId   = privateMetadata.spreadsheetId;
+      var rowIndex        = privateMetadata.rowIndex;
+      var token           = privateMetadata.token;
+
+      // 1. Process all dynamic column updates
+      var updates = [];
+      for (var blockId in values) {
+        if (blockId.indexOf('col_') === 0) {
+          var colIdx = blockId.replace('col_', '').replace('_block', '');
+          var inputId = blockId.replace('_block', '_input');
+          if (values[blockId] && values[blockId][inputId]) {
+            var val = values[blockId][inputId].value;
+            updates.push({ col: parseInt(colIdx), value: val });
+          }
+        }
+      }
+
+      // 2. Apply updates to the sheet
+      try {
+        var ss = SpreadsheetApp.openById(spreadsheetId);
+        var scriptProps = PropertiesService.getScriptProperties();
+        var sheetName = scriptProps.getProperty('SHEET_NAME_' + spreadsheetId);
+        var sheet = ss.getSheetByName(sheetName);
+
+        if (sheet) {
+          updates.forEach(function(u) {
+            // Column index from config is 0-based, getRange is 1-based
+            sheet.getRange(rowIndex, u.col + 1).setValue(u.value);
+          });
+        }
+      } catch (err) {
+        Logger.log('Error applying dynamic updates: ' + err.toString());
+      }
+
+      // 3. Resolve the alert (Logging & Pending cleanup)
+      // Use the first update as the 'status' for the log, or a default 'Resolved'
+      var primaryStatus = updates.length > 0 ? updates[0].value : 'Resolved';
+      var notes = (values.notes_block && values.notes_block.notes_input)
+                  ? values.notes_block.notes_input.value : '';
 
       resolveAlert(
-        privateMetadata.token,
-        privateMetadata.rowIndex,
-        newStatus,
+        token,
+        rowIndex,
+        primaryStatus,
         notes,
-        privateMetadata.spreadsheetId
+        spreadsheetId
       );
 
       // Refresh App Home for the submitting user
@@ -145,9 +181,12 @@ function doGet(e) {
     }
 
     return HtmlService.createHtmlOutput(
-      '<h2>✅ Connected!</h2>' +
-      '<p>Slack has been successfully connected to your spreadsheet.<br>' +
-      'You can close this tab and return to your sheet.</p>'
+      '<div style="font-family: sans-serif; text-align: center; padding-top: 50px;">' +
+      '<h1 style="color: #006644;">✅ Successfully Connected!</h1>' +
+      '<p style="font-size: 18px; color: #333;">SheetAlerts has been linked to your Slack workspace.</p>' +
+      '<p style="color: #777;">You can now close this tab and return to your Google Sheet.</p>' +
+      '<button onclick="window.close()" style="background: #0052cc; color: white; padding: 10px 20px; border: none; border-radius: 4px; cursor: pointer; font-size: 16px;">Close Tab</button>' +
+      '</div>'
     );
   }
 
@@ -156,7 +195,39 @@ function doGet(e) {
   var rowIndex      = parseInt(e.parameter.rowIndex);
   var spreadsheetId = e.parameter.spreadsheetId;
 
+  if (action === 'get_bot_config' && spreadsheetId) {
+    var scriptProps = PropertiesService.getScriptProperties();
+    var sheetName   = scriptProps.getProperty('SHEET_NAME_' + spreadsheetId);
+    
+    if (!sheetName) {
+      return ContentService.createTextOutput(JSON.stringify({ error: 'Sheet not configured' }))
+        .setMimeType(ContentService.MimeType.JSON);
+    }
+
+    var headers = [];
+    try {
+      var ss = SpreadsheetApp.openById(spreadsheetId);
+      var sheet = ss.getSheetByName(sheetName);
+      if (sheet) {
+        headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+      }
+    } catch (err) {
+      return ContentService.createTextOutput(JSON.stringify({ error: 'Could not read sheet: ' + err.toString() }))
+        .setMimeType(ContentService.MimeType.JSON);
+    }
+
+    var config = {
+      token:          scriptProps.getProperty('SLACK_TOKEN_' + spreadsheetId),
+      actionableCols: scriptProps.getProperty('ACTIONS_' + spreadsheetId) || '[]',
+      headers:        headers
+    };
+
+    return ContentService.createTextOutput(JSON.stringify(config))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+
   if (action === 'resolve' && token && rowIndex && spreadsheetId) {
+
     var spreadsheet = SpreadsheetApp.openById(spreadsheetId);
     var logSheet    = spreadsheet.getSheetByName('AlertsLog');
 

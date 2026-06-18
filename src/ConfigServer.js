@@ -92,19 +92,113 @@ function getHeadersForSheet(sheetName) {
   return sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
 }
 
+/**
+ * Intelligently guesses column mappings based on header names.
+ */
+function guessColumnMapping(sheetName) {
+  var headers = getHeadersForSheet(sheetName);
+  var mapping = {
+    NAME_COL: -1,
+    EMAIL_COL: -1,
+    EXTRA_INFO_COL: -1,
+    STATUS_COL: -1,
+    DATE_COL: -1
+  };
+
+  headers.forEach(function(h, i) {
+    var name = String(h).toLowerCase();
+    if (mapping.NAME_COL === -1 && /name|client|customer|user|id/i.test(name)) mapping.NAME_COL = i;
+    if (mapping.EMAIL_COL === -1 && /email|mail|contact/i.test(name)) mapping.EMAIL_COL = i;
+    if (mapping.STATUS_COL === -1 && /status|condition|stage|state/i.test(name)) mapping.STATUS_COL = i;
+    if (mapping.DATE_COL === -1 && /date|due|time/i.test(name)) mapping.DATE_COL = i;
+    if (mapping.EXTRA_INFO_COL === -1 && /info|note|description|memo/i.test(name)) mapping.EXTRA_INFO_COL = i;
+  });
+
+  return mapping;
+}
+
 function getConfig() {
   var props = PropertiesService.getDocumentProperties();
   return {
-    SHEET_NAME:        props.getProperty('SHEET_NAME'),
-    SLACK_CHANNEL:     props.getProperty('SLACK_CHANNEL'),
-    NAME_COL:          props.getProperty('NAME_COL'),
-    EMAIL_COL:         props.getProperty('EMAIL_COL'),
-    EXTRA_INFO_COL:    props.getProperty('EXTRA_INFO_COL'),
-    STATUS_COL:        props.getProperty('STATUS_COL'),
-    DATE_COL:          props.getProperty('DATE_COL'),
-    TRIGGER_VALUE:     props.getProperty('TRIGGER_VALUE'),
-    DOWNSTREAM_CONFIG: props.getProperty('DOWNSTREAM_CONFIG')
+    SHEET_NAME:                 props.getProperty('SHEET_NAME'),
+    SLACK_CHANNEL:              props.getProperty('SLACK_CHANNEL'),
+    NAME_COL:                   props.getProperty('NAME_COL'),
+    EMAIL_COL:                  props.getProperty('EMAIL_COL'),
+    EXTRA_INFO_COL:             props.getProperty('EXTRA_INFO_COL'),
+    STATUS_COL:                 props.getProperty('STATUS_COL'),
+    DATE_COL:                   props.getProperty('DATE_COL'),
+    TRIGGER_VALUE:              props.getProperty('TRIGGER_VALUE'),
+    DOWNSTREAM_CONFIG:          props.getProperty('DOWNSTREAM_CONFIG'),
+    AUTO_TIMESTAMP_COL:         props.getProperty('AUTO_TIMESTAMP_COL'),
+    AUTO_TIMESTAMP_TRIGGER_COL: props.getProperty('AUTO_TIMESTAMP_TRIGGER_COL'),
+    AUTO_TIMESTAMP_VALUE:       props.getProperty('AUTO_TIMESTAMP_VALUE'),
+    DUE_DATE_COL:               props.getProperty('DUE_DATE_COL'),
+    FINAL_STATUS_COL:           props.getProperty('FINAL_STATUS_COL'),
+    ACTIONABLE_COLS:            props.getProperty('ACTIONABLE_COLS')
   };
+}
+
+/**
+ * Mirrors the current bot configuration to the Supabase database.
+ * This eliminates the need for the Supabase function to call GAS during modal opening,
+ * preventing the Slack 3-second trigger_id timeout.
+ */
+function syncConfigToSupabase(spreadsheetId) {
+  try {
+    var scriptProps = PropertiesService.getScriptProperties();
+    var token       = scriptProps.getProperty('SLACK_TOKEN_' + spreadsheetId);
+    var sheetName   = scriptProps.getProperty('SHEET_NAME_' + spreadsheetId);
+    var actionable  = scriptProps.getProperty('ACTIONS_' + spreadsheetId) || '[]';
+
+    if (!token) {
+      Logger.log('syncConfigToSupabase: No token found for ' + spreadsheetId + '. Skipping.');
+      return;
+    }
+
+    // Get actual headers from the sheet
+    var headers = [];
+    try {
+      var ss = SpreadsheetApp.openById(spreadsheetId);
+      var sheet = ss.getSheetByName(sheetName);
+      if (sheet) {
+        headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+      }
+    } catch (e) {
+      Logger.log('syncConfigToSupabase: Error reading headers: ' + e.toString());
+    }
+
+    // Use Supabase REST API (Upsert)
+    var supabaseUrl = 'https://apjftvnmskckrhgrdpbk.supabase.co/rest/v1/bot_configs';
+    var serviceKey  = 'REDACTED_SUPABASE_KEY'; // service_role key
+
+    var payload = {
+      spreadsheet_id: spreadsheetId,
+      token: token,
+      headers: JSON.stringify(headers),
+      actionable_cols: actionable
+    };
+
+    var options = {
+      method: 'post',
+      contentType: 'application/json',
+      headers: {
+        'apikey': serviceKey,
+        'Authorization': 'Bearer ' + serviceKey,
+        'Prefer': 'resolution=merge-duplicates' // Upsert
+      },
+      payload: JSON.stringify(payload),
+      muteHttpExceptions: true
+    };
+
+    var response = UrlFetchApp.fetch(supabaseUrl, options);
+    if (response.getResponseCode() !== 201 && response.getResponseCode() !== 200) {
+      Logger.log('syncConfigToSupabase error: ' + response.getContentText());
+    } else {
+      Logger.log('syncConfigToSupabase: Successfully mirrored config for ' + spreadsheetId);
+    }
+  } catch (err) {
+    Logger.log('syncConfigToSupabase CRITICAL: ' + err.toString());
+  }
 }
 
 function saveConfig(config) {
@@ -116,23 +210,25 @@ function saveConfig(config) {
 
   // ── DocumentProperties (scoped to this spreadsheet) ──────────────────────
   docProps.setProperties({
-    'SHEET_NAME':        config.SHEET_NAME     || '',
-    'SLACK_CHANNEL':     config.SLACK_CHANNEL  || '',
-    'NAME_COL':          config.NAME_COL,
-    'EMAIL_COL':         config.EMAIL_COL,
-    'EXTRA_INFO_COL':    config.EXTRA_INFO_COL,
-    'STATUS_COL':        config.STATUS_COL,
-    'DATE_COL':          config.DATE_COL       || '-1',
-    'TRIGGER_VALUE':     config.TRIGGER_VALUE,
-    'SPREADSHEET_ID':    spreadsheetId,
-    'INSTALLER_EMAIL':   installerEmail
+    'SHEET_NAME':                 config.SHEET_NAME     || '',
+    'SLACK_CHANNEL':              config.SLACK_CHANNEL  || '',
+    'NAME_COL':                   config.NAME_COL,
+    'EMAIL_COL':                  config.EMAIL_COL,
+    'EXTRA_INFO_COL':             config.EXTRA_INFO_COL,
+    'STATUS_COL':                 config.STATUS_COL,
+    'DATE_COL':                   config.DATE_COL       || '-1',
+    'TRIGGER_VALUE':              config.TRIGGER_VALUE,
+    'SPREADSHEET_ID':             spreadsheetId,
+    'INSTALLER_EMAIL':            installerEmail,
+    'AUTO_TIMESTAMP_COL':         config.AUTO_TIMESTAMP_COL         || '-1',
+    'AUTO_TIMESTAMP_TRIGGER_COL': config.AUTO_TIMESTAMP_TRIGGER_COL || '-1',
+    'AUTO_TIMESTAMP_VALUE':       config.AUTO_TIMESTAMP_VALUE       || '',
+    'DUE_DATE_COL':               config.DUE_DATE_COL               || '-1',
+    'FINAL_STATUS_COL':           config.FINAL_STATUS_COL           || '-1',
+    'ACTIONABLE_COLS':            config.ACTIONABLE_COLS            || '[]'
   });
 
   // ── ScriptProperties (global — keyed per spreadsheet to support multi-tenant) ──
-  // SLACK_CHANNEL and INSTALLER_EMAIL are keyed so webhook handlers can look
-  // them up without a DocumentProperties context (e.g. doPost, publishAppHome).
-  // We also mirror sheet config here so time-based triggers and doPost can
-  // run runConditionCheck() reliably (DocumentProperties = null in those contexts).
   scriptProps.setProperty('SPREADSHEET_ID', spreadsheetId);
   scriptProps.setProperty('SLACK_CHANNEL_'    + spreadsheetId, config.SLACK_CHANNEL || '');
   scriptProps.setProperty('INSTALLER_EMAIL_'  + spreadsheetId, installerEmail);
@@ -144,7 +240,16 @@ function saveConfig(config) {
   scriptProps.setProperty('EXTRA_INFO_COL_'   + spreadsheetId, config.EXTRA_INFO_COL || '-1');
   scriptProps.setProperty('DATE_COL_'         + spreadsheetId, config.DATE_COL       || '-1');
 
+  // New sync properties for multi-tenant triggers
+  scriptProps.setProperty('AT_COL_'         + spreadsheetId, config.AUTO_TIMESTAMP_COL         || '-1');
+  scriptProps.setProperty('AT_TRIG_COL_'    + spreadsheetId, config.AUTO_TIMESTAMP_TRIGGER_COL || '-1');
+  scriptProps.setProperty('AT_VAL_'         + spreadsheetId, config.AUTO_TIMESTAMP_VALUE       || '');
+  scriptProps.setProperty('ACTIONS_'        + spreadsheetId, config.ACTIONABLE_COLS            || '[]');
+
   installTriggers();
+  
+  // Sync to Supabase mirror to prevent modal timeout
+  syncConfigToSupabase(spreadsheetId);
 }
 
 function saveDownstreamConfig(config) {
@@ -299,9 +404,9 @@ function disconnectSlack() {
  */
 function setupDeveloperCredentials() {
   PropertiesService.getScriptProperties().setProperties({
-    'SLACK_CLIENT_ID':     'YOUR_CLIENT_ID_HERE',
-    'SLACK_CLIENT_SECRET': 'YOUR_CLIENT_SECRET_HERE',
-    'DEPLOYED_WEBAPP_URL': 'https://script.google.com/macros/s/YOUR_DEPLOYMENT_ID/exec'
+    'SLACK_CLIENT_ID':     'REDACTED_SLACK_CLIENT_ID',
+    'SLACK_CLIENT_SECRET': 'REDACTED_SLACK_CLIENT_SECRET',
+    'DEPLOYED_WEBAPP_URL': 'https://apjftvnmskckrhgrdpbk.supabase.co/functions/v1/bot'
   });
   Logger.log('Developer credentials saved to ScriptProperties.');
 }

@@ -1,16 +1,17 @@
 {
   "name": "sheet-alerts-bot",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "description": "Google Workspace Add-on for Slack/Gmail Alerts",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "push": "clasp push",
+    "deploy": "./deploy.sh",
+    "open": "clasp open",
+    "status": "clasp deployments",
+    "logs": "clasp logs --tail",
+    "sb:deploy": "supabase functions deploy bot --no-verify-jwt",
+    "sb:set-url": "supabase secrets set GAS_WEBAPP_URL="
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "type": "commonjs",
   "devDependencies": {
-    "@types/google-apps-script": "^2.0.11"
+    "@types/google-apps-script": "^1.0.83"
   }
 }
