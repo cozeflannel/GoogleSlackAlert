@@ -18,7 +18,7 @@ function onHomepage(e) {
  * Main UI builder using CardService.
  * Replaces the legacy Sidebar.html.
  */
-function buildSettingsCard(spreadsheetId, selectedSheetName) {
+function buildSettingsCard(spreadsheetId, selectedSheetName, downstreamEnabledOverride, downstreamSheetOverride) {
   var config      = getConfig();
   var sheetName   = selectedSheetName || config.SHEET_NAME || SpreadsheetApp.openById(spreadsheetId).getSheets()[0].getName();
   var slackStatus = getSlackConnectionStatus();
@@ -43,7 +43,12 @@ function buildSettingsCard(spreadsheetId, selectedSheetName) {
         .setOpenAs(CardService.OpenAs.FULL_SIZE)
         .setOnClose(CardService.OnClose.RELOAD_ADD_ON)));
   } else {
-    statusSection.addWidget(CardService.newTextParagraph().setText('✅ <b>Connected to Slack</b>'));
+    var teamName = PropertiesService.getScriptProperties().getProperty('SLACK_TEAM_' + spreadsheetId) || '';
+    statusSection.addWidget(CardService.newTextParagraph()
+      .setText('✅ <b>Connected to Slack</b>' + (teamName ? ' (' + teamName + ')' : '')));
+    statusSection.addWidget(CardService.newTextButton()
+      .setText('Disconnect Slack')
+      .setOnClickAction(CardService.newAction().setFunctionName('handleDisconnectSlack')));
   }
   card.addSection(statusSection);
 
@@ -202,6 +207,88 @@ function buildSettingsCard(spreadsheetId, selectedSheetName) {
   actionSection.addWidget(actionPicker);
   card.addSection(actionSection);
 
+  // ── Section 6: Downstream Notifications (Cascade) ────────────────────────
+  var dsEnabled = (typeof downstreamEnabledOverride === 'boolean')
+    ? downstreamEnabledOverride
+    : !!dsConfig.enabled;
+
+  var downstreamSection = CardService.newCardSection()
+    .setHeader('Downstream Notifications (optional)')
+    .setCollapsible(true);
+
+  downstreamSection.addWidget(CardService.newTextParagraph()
+    .setText('When you resolve an alert, notify the owner of another sheet that depends on your update.'));
+
+  downstreamSection.addWidget(CardService.newSelectionInput()
+    .setType(CardService.SelectionInputType.SWITCH)
+    .setTitle('Enable downstream notifications')
+    .setFieldName('DS_ENABLED')
+    .addItem('Enabled', 'true', dsEnabled)
+    .setOnChangeAction(CardService.newAction().setFunctionName('handleToggleDownstream')));
+
+  if (dsEnabled) {
+    var dsSelectedSheet = downstreamSheetOverride || dsConfig.sheetName || '';
+
+    var dsSheetPicker = CardService.newSelectionInput()
+      .setType(CardService.SelectionInputType.DROPDOWN)
+      .setTitle('Notify about which sheet')
+      .setFieldName('DS_SHEET')
+      .setOnChangeAction(CardService.newAction().setFunctionName('handleDownstreamSheetChange'));
+
+    SpreadsheetApp.openById(spreadsheetId).getSheets().forEach(function(s) {
+      var n = s.getName();
+      if (n === sheetName) return; // can't watch the sheet already being monitored
+      dsSheetPicker.addItem(n, n, n === dsSelectedSheet);
+    });
+    downstreamSection.addWidget(dsSheetPicker);
+
+    if (dsSelectedSheet) {
+      var dsWatchColPicker = CardService.newSelectionInput()
+        .setType(CardService.SelectionInputType.DROPDOWN)
+        .setTitle('Watch column on that sheet')
+        .setFieldName('DS_WATCH_COL');
+      getHeadersForSheet(dsSelectedSheet).forEach(function(h, i) {
+        if (h) dsWatchColPicker.addItem(h, String(i), String(i) === String(dsConfig.watchCol));
+      });
+      downstreamSection.addWidget(dsWatchColPicker);
+    }
+
+    downstreamSection.addWidget(CardService.newTextInput()
+      .setFieldName('DS_TRIGGER_VALUE').setTitle('Trigger when value equals')
+      .setHint('e.g. Pending').setValue(dsConfig.triggerValue || ''));
+    downstreamSection.addWidget(CardService.newTextInput()
+      .setFieldName('DS_EMAIL').setTitle('Notify this email address')
+      .setValue(dsConfig.notifyEmail || ''));
+    downstreamSection.addWidget(CardService.newTextInput()
+      .setFieldName('DS_SLACK_USER').setTitle('Slack User ID to notify (optional)')
+      .setHint('Find in Slack: profile → More → Copy member ID').setValue(dsConfig.notifySlackUser || ''));
+    downstreamSection.addWidget(CardService.newTextInput()
+      .setFieldName('DS_MESSAGE').setTitle('Context message')
+      .setHint('e.g. Sheet A updated — please review').setValue(dsConfig.cascadeMessage || ''));
+  }
+  card.addSection(downstreamSection);
+
+  // ── Section 7: Danger Zone ────────────────────────────────────────────────
+  var dangerSection = CardService.newCardSection()
+    .setHeader('Danger Zone')
+    .setCollapsible(true);
+  dangerSection.addWidget(CardService.newTextParagraph()
+    .setText('Stop all monitoring, delete triggers, and completely disconnect this sheet.'));
+  dangerSection.addWidget(CardService.newTextButton()
+    .setText('Disconnect App Completely')
+    .setOnClickAction(CardService.newAction().setFunctionName('handleDisconnectApp')));
+  card.addSection(dangerSection);
+
+  // ── Section 8: Legal ────────────────────────────────────────────────────
+  var legalSection = CardService.newCardSection();
+  legalSection.addWidget(CardService.newTextButton()
+    .setText('Privacy Policy')
+    .setOnClickAction(CardService.newAction().setFunctionName('handleShowPrivacy')));
+  legalSection.addWidget(CardService.newTextButton()
+    .setText('Terms of Service')
+    .setOnClickAction(CardService.newAction().setFunctionName('handleShowTerms')));
+  card.addSection(legalSection);
+
   // ── Footer ───────────────────────────────────────────────────────────────
   card.setFixedFooter(CardService.newFixedFooter()
     .setPrimaryButton(CardService.newTextButton()
@@ -221,11 +308,19 @@ function handleSheetChange(e) {
 }
 
 function handleToggleDownstream(e) {
-  var enabled = e.formInput.ds_enabled === 'true';
-  // We don't save yet, just refresh UI to show/hide fields
-  // In a real app, you might want to temporarily store this in privateMetadata
+  var enabled = e.formInput.DS_ENABLED === 'true';
   return CardService.newActionResponseBuilder()
-    .setNavigation(CardService.newNavigation().updateCard(buildSettingsCard(SpreadsheetApp.getActiveSpreadsheet().getId(), e.formInput.SHEET_NAME)))
+    .setNavigation(CardService.newNavigation().updateCard(
+      buildSettingsCard(SpreadsheetApp.getActiveSpreadsheet().getId(), e.formInput.SHEET_NAME, enabled, e.formInput.DS_SHEET)
+    ))
+    .build();
+}
+
+function handleDownstreamSheetChange(e) {
+  return CardService.newActionResponseBuilder()
+    .setNavigation(CardService.newNavigation().updateCard(
+      buildSettingsCard(SpreadsheetApp.getActiveSpreadsheet().getId(), e.formInput.SHEET_NAME, true, e.formInput.DS_SHEET)
+    ))
     .build();
 }
 
@@ -249,6 +344,17 @@ function handleSaveSettings(e) {
     };
 
     saveConfig(config);
+
+    var downstreamConfig = { enabled: e.formInput.DS_ENABLED === 'true' };
+    if (downstreamConfig.enabled) {
+      downstreamConfig.sheetName       = e.formInput.DS_SHEET || '';
+      downstreamConfig.watchCol        = parseInt(e.formInput.DS_WATCH_COL || '-1');
+      downstreamConfig.triggerValue    = e.formInput.DS_TRIGGER_VALUE || '';
+      downstreamConfig.notifyEmail     = e.formInput.DS_EMAIL || '';
+      downstreamConfig.notifySlackUser = e.formInput.DS_SLACK_USER || '';
+      downstreamConfig.cascadeMessage  = e.formInput.DS_MESSAGE || '';
+    }
+    saveDownstreamConfig(downstreamConfig);
 
     // Warp Speed: Trigger an immediate scan so the user sees results instantly
     try {

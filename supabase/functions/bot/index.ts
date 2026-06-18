@@ -104,8 +104,8 @@ serve(async (req) => {
           const dbUrl = `${Deno.env.get("SUPABASE_URL")}/rest/v1/bot_configs?spreadsheet_id=eq.${spreadsheetId}&select=*`;
           const dbRes = await fetch(dbUrl, {
             headers: { 
-              'apikey': Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
-              'Authorization': `Bearer ${Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")}`
+              'apikey': Deno.env.get("BOT_SECRET_KEY")!,
+              'Authorization': `Bearer ${Deno.env.get("BOT_SECRET_KEY")}`
             }
           });
 

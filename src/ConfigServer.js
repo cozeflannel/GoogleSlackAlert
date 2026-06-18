@@ -396,6 +396,38 @@ function disconnectSlack() {
   var spreadsheetId = SpreadsheetApp.getActiveSpreadsheet().getId();
   PropertiesService.getScriptProperties()
     .deleteProperty('SLACK_TOKEN_' + spreadsheetId);
+  deleteSupabaseConfigMirror(spreadsheetId);
+}
+
+function deleteSupabaseConfigMirror(spreadsheetId) {
+  try {
+    var scriptProps = PropertiesService.getScriptProperties();
+    var secretKey   = scriptProps.getProperty('BOT_SECRET_KEY');
+    if (!secretKey) {
+      Logger.log('deleteSupabaseConfigMirror: No BOT_SECRET_KEY set. Skipping.');
+      return;
+    }
+
+    var supabaseUrl = 'https://apjftvnmskckrhgrdpbk.supabase.co/rest/v1/bot_configs?spreadsheet_id=eq.' + encodeURIComponent(spreadsheetId);
+
+    var options = {
+      method: 'delete',
+      headers: {
+        'apikey': secretKey,
+        'Authorization': 'Bearer ' + secretKey
+      },
+      muteHttpExceptions: true
+    };
+
+    var response = UrlFetchApp.fetch(supabaseUrl, options);
+    if (response.getResponseCode() >= 300) {
+      Logger.log('deleteSupabaseConfigMirror error: ' + response.getContentText());
+    } else {
+      Logger.log('deleteSupabaseConfigMirror: Removed mirror for ' + spreadsheetId);
+    }
+  } catch (err) {
+    Logger.log('deleteSupabaseConfigMirror CRITICAL: ' + err.toString());
+  }
 }
 
 /**
@@ -406,7 +438,8 @@ function setupDeveloperCredentials() {
   PropertiesService.getScriptProperties().setProperties({
     'SLACK_CLIENT_ID':     'REDACTED_SLACK_CLIENT_ID',
     'SLACK_CLIENT_SECRET': 'REDACTED_SLACK_CLIENT_SECRET',
-    'DEPLOYED_WEBAPP_URL': 'https://apjftvnmskckrhgrdpbk.supabase.co/functions/v1/bot'
+    'DEPLOYED_WEBAPP_URL': 'https://apjftvnmskckrhgrdpbk.supabase.co/functions/v1/bot',
+    'BOT_SECRET_KEY': 'REDACTED_BOT_SECRET_KEY'
   });
   Logger.log('Developer credentials saved to ScriptProperties.');
 }

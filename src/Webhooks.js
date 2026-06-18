@@ -180,6 +180,9 @@ function doGet(e) {
       scriptProps.setProperty('TEAM_SPREADSHEET_' + teamId, state);
     }
 
+    // Sync to Supabase mirror immediately after OAuth completes
+    syncConfigToSupabase(state);
+
     return HtmlService.createHtmlOutput(
       '<div style="font-family: sans-serif; text-align: center; padding-top: 50px;">' +
       '<h1 style="color: #006644;">✅ Successfully Connected!</h1>' +
