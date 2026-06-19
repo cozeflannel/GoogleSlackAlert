@@ -1,0 +1,12 @@
+.git
+.env
+node_modules
+package-lock.json
+deploy.sh
+README.md
+.geminiignore
+package.json
+clasp.json
+.clasp.json
+.clasprc.json
+src/__deploy_helper__.js

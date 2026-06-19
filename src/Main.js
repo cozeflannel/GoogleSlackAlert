@@ -122,9 +122,9 @@ function runConditionCheck() {
   var emailCol       = parseInt(docProps.getProperty('EMAIL_COL') || scriptProps.getProperty('EMAIL_COL_' + spreadsheetId) || '-1');
   var statusCol      = parseInt(docProps.getProperty('STATUS_COL') || scriptProps.getProperty('STATUS_COL_' + spreadsheetId) || '-1');
   var triggerValue   = docProps.getProperty('TRIGGER_VALUE') || scriptProps.getProperty('TRIGGER_VALUE_' + spreadsheetId);
-  var dueDateCol     = parseInt(docProps.getProperty('DUE_DATE_COL') || '-1');
-  var finalStatusCol = parseInt(docProps.getProperty('FINAL_STATUS_COL') || '-1');
-  var tsCol          = parseInt(docProps.getProperty('AUTO_TIMESTAMP_COL') || '-1');
+  var dueDateCol     = parseInt(docProps.getProperty('DUE_DATE_COL')     || scriptProps.getProperty('DUE_DATE_COL_'     + spreadsheetId) || '-1');
+  var finalStatusCol = parseInt(docProps.getProperty('FINAL_STATUS_COL') || scriptProps.getProperty('FINAL_STATUS_COL_' + spreadsheetId) || '-1');
+  var tsCol          = parseInt(docProps.getProperty('AUTO_TIMESTAMP_COL') || scriptProps.getProperty('AT_COL_'           + spreadsheetId) || '-1');
 
   var ss;
   try { ss = SpreadsheetApp.openById(spreadsheetId); } catch (e) { return; }

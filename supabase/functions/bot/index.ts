@@ -1,5 +1,53 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts"
 
+/**
+ * Verifies a Slack request using HMAC-SHA256 signature.
+ * See: https://api.slack.com/authentication/verifying-requests-from-slack
+ *
+ * Returns true if the signature is valid, false otherwise.
+ * Must be called BEFORE the body is consumed / parsed.
+ */
+async function verifySlackSignature(req: Request, rawBody: string): Promise<boolean> {
+  const signingSecret = Deno.env.get("SLACK_SIGNING_SECRET");
+  if (!signingSecret) {
+    console.error("SLACK_SIGNING_SECRET is not set — rejecting all POST requests.");
+    return false;
+  }
+
+  const timestamp = req.headers.get("X-Slack-Request-Timestamp");
+  const slackSig  = req.headers.get("X-Slack-Signature");
+
+  if (!timestamp || !slackSig) return false;
+
+  // Reject requests older than 5 minutes to prevent replay attacks
+  const nowSec = Math.floor(Date.now() / 1000);
+  if (Math.abs(nowSec - parseInt(timestamp, 10)) > 300) return false;
+
+  const sigBaseString = `v0:${timestamp}:${rawBody}`;
+
+  const encoder = new TextEncoder();
+  const key = await crypto.subtle.importKey(
+    "raw",
+    encoder.encode(signingSecret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"]
+  );
+
+  const signatureBuffer = await crypto.subtle.sign("HMAC", key, encoder.encode(sigBaseString));
+  const hexSignature = "v0=" + Array.from(new Uint8Array(signatureBuffer))
+    .map(b => b.toString(16).padStart(2, "0"))
+    .join("");
+
+  // Constant-time comparison
+  if (hexSignature.length !== slackSig.length) return false;
+  let mismatch = 0;
+  for (let i = 0; i < hexSignature.length; i++) {
+    mismatch |= hexSignature.charCodeAt(i) ^ slackSig.charCodeAt(i);
+  }
+  return mismatch === 0 ? (console.log("Slack signature verified successfully"), true) : (console.warn("Slack signature mismatch"), false);
+}
+
 async function openModalAsync(payload: any, action: any) {
   try {
     console.log("openModalAsync started. trigger_id present?", Boolean(payload?.trigger_id));
@@ -11,8 +59,9 @@ async function openModalAsync(payload: any, action: any) {
     const dbUrl = `${Deno.env.get("SUPABASE_URL")}/rest/v1/bot_configs?spreadsheet_id=eq.${spreadsheetId}&select=*`;
     const dbRes = await fetch(dbUrl, {
       headers: {
-        'apikey': Deno.env.get("BOT_SECRET_KEY")!,
-        'Authorization': `Bearer ${Deno.env.get("BOT_SECRET_KEY")}`
+        // Supabase secret key (formerly service_role) — grants full DB access, bypasses RLS. Never expose client-side.
+        'apikey': Deno.env.get("SUP_SECRET_KEY")!,
+        'Authorization': `Bearer ${Deno.env.get("SUP_SECRET_KEY")}`
       }
     });
 
@@ -77,7 +126,7 @@ serve(async (req) => {
     const gasUrl = new URL(rawUrl);
     url.searchParams.forEach((val, key) => gasUrl.searchParams.set(key, val));
 
-    // 1. Handle GET requests
+    // 1. Handle GET requests — no Slack signature check needed
     if (req.method === 'GET' || req.method === 'HEAD') {
       const action = url.searchParams.get("action");
 
@@ -86,8 +135,9 @@ serve(async (req) => {
           const dbUrl = `${Deno.env.get("SUPABASE_URL")}/rest/v1/bot_configs?select=*`;
           const dbRes = await fetch(dbUrl, {
             headers: {
-              'apikey': Deno.env.get("BOT_SECRET_KEY")!,
-              'Authorization': `Bearer ${Deno.env.get("BOT_SECRET_KEY")}`
+              // Supabase secret key (formerly service_role) — grants full DB access, bypasses RLS. Never expose client-side.
+              'apikey': Deno.env.get("SUP_SECRET_KEY")!,
+              'Authorization': `Bearer ${Deno.env.get("SUP_SECRET_KEY")}`
             }
           });
           const data = await dbRes.json();
@@ -130,9 +180,16 @@ serve(async (req) => {
       return await fetch(gasUrl.toString(), { redirect: 'follow' });
     }
 
-    // 2. Handle POST requests
-    const contentType = req.headers.get("content-type") ?? "";
+    // 2. Handle POST requests — verify Slack signature BEFORE parsing body
     const bodyText = await req.text();
+
+    const isSlackSigned = await verifySlackSignature(req, bodyText);
+    if (!isSlackSigned) {
+      console.error("Slack signature verification failed — rejecting request.");
+      return new Response("Unauthorized", { status: 401 });
+    }
+
+    const contentType = req.headers.get("content-type") ?? "";
     let payload: any;
 
     if (contentType.includes("application/x-www-form-urlencoded")) {
@@ -161,7 +218,7 @@ serve(async (req) => {
       const action = payload.actions?.[0];
       if (action?.action_id === 'open_action_modal') {
         console.log("open_action_modal intercepted, trigger_id:", payload.trigger_id);
-        await openModalAsync(payload, action);
+        openModalAsync(payload, action);
         return new Response(JSON.stringify({ ok: true }), {
           headers: { "Content-Type": "application/json" }
         });
@@ -184,10 +241,6 @@ serve(async (req) => {
 
   } catch (err) {
     console.error("PROXY CRASH:", err.message);
-    return new Response(`Internal Server Error: ${err.message}`, { status: 500 });
-  }
-});
-ASH:", err.message);
     return new Response(`Internal Server Error: ${err.message}`, { status: 500 });
   }
 });

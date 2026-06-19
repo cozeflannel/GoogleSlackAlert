@@ -9,9 +9,9 @@
     "status": "clasp deployments",
     "logs": "clasp logs --tail",
     "sb:deploy": "supabase functions deploy bot --no-verify-jwt",
-    "sb:set-url": "supabase secrets set GAS_WEBAPP_URL="
+    "sb:set-url": "supabase secrets set GAS_WEBAPP_URL=$npm_config_url"
   },
   "devDependencies": {
-    "@types/google-apps-script": "^1.0.83"
+    "@types/google-apps-script": "^2.0.11"
   }
 }

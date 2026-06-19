@@ -1,0 +1,7 @@
+model_list:
+  - model_name: gemma-4-31b-it
+    litellm_params:
+      model: ollama/gemma:latest
+  - model_name: gemini-2.5-flash-lite
+    litellm_params:
+      model: ollama/gemma:latest

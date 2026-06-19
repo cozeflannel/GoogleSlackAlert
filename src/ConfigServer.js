@@ -168,8 +168,10 @@ function syncConfigToSupabase(spreadsheetId) {
     }
 
     // Use Supabase REST API (Upsert)
-    var supabaseUrl = 'https://apjftvnmskckrhgrdpbk.supabase.co/rest/v1/bot_configs';
-    var serviceKey  = 'REDACTED_SUPABASE_KEY'; // service_role key
+    var supabaseBaseUrl = PropertiesService.getScriptProperties().getProperty('SUPABASE_URL');
+    // Supabase secret key (formerly service_role) — grants full DB access, bypasses RLS. Never expose client-side.
+    var serviceKey      = PropertiesService.getScriptProperties().getProperty('SUP_SECRET_KEY');
+    var supabaseUrl     = supabaseBaseUrl + '/rest/v1/bot_configs';
 
     var payload = {
       spreadsheet_id: spreadsheetId,
@@ -364,17 +366,20 @@ function installTrigger() { installTriggers(); }
 
 function getSlackConnectionStatus() {
   var spreadsheetId = SpreadsheetApp.getActiveSpreadsheet().getId();
-  var token = PropertiesService.getScriptProperties()
-                .getProperty('SLACK_TOKEN_' + spreadsheetId);
+  var docProps      = PropertiesService.getDocumentProperties();
+  var scriptProps   = PropertiesService.getScriptProperties();
+  var token = docProps.getProperty('SLACK_TOKEN') || scriptProps.getProperty('SLACK_TOKEN_' + spreadsheetId);
   return { connected: !!token };
 }
 
 function getSlackOAuthUrl() {
   var spreadsheetId = SpreadsheetApp.getActiveSpreadsheet().getId();
+  var docProps      = PropertiesService.getDocumentProperties();
   var scriptProps   = PropertiesService.getScriptProperties();
-  var clientId      = scriptProps.getProperty('SLACK_CLIENT_ID');
+  var clientId      = docProps.getProperty('SLACK_CLIENT_ID') || scriptProps.getProperty('SLACK_CLIENT_ID_' + spreadsheetId);
 
-  var deployedUrl   = scriptProps.getProperty('DEPLOYED_WEBAPP_URL');
+  // This is the SUPABASE function URL, not a Google Apps Script URL — used for Slack OAuth redirect_uri construction.
+  var deployedUrl   = docProps.getProperty('DEPLOYED_WEBAPP_URL') || scriptProps.getProperty('DEPLOYED_WEBAPP_URL_' + spreadsheetId);
   if (!deployedUrl) {
     throw new Error(
       'DEPLOYED_WEBAPP_URL is not set in Script Properties. ' +
@@ -402,13 +407,15 @@ function disconnectSlack() {
 function deleteSupabaseConfigMirror(spreadsheetId) {
   try {
     var scriptProps = PropertiesService.getScriptProperties();
-    var secretKey   = scriptProps.getProperty('BOT_SECRET_KEY');
+    // Supabase secret key (formerly service_role) — grants full DB access, bypasses RLS. Never expose client-side.
+    var secretKey   = scriptProps.getProperty('SUP_SECRET_KEY');
     if (!secretKey) {
-      Logger.log('deleteSupabaseConfigMirror: No BOT_SECRET_KEY set. Skipping.');
+      Logger.log('deleteSupabaseConfigMirror: No SUP_SECRET_KEY set. Skipping.');
       return;
     }
 
-    var supabaseUrl = 'https://apjftvnmskckrhgrdpbk.supabase.co/rest/v1/bot_configs?spreadsheet_id=eq.' + encodeURIComponent(spreadsheetId);
+    var supabaseBaseUrl = scriptProps.getProperty('SUPABASE_URL');
+    var supabaseUrl     = supabaseBaseUrl + '/rest/v1/bot_configs?spreadsheet_id=eq.' + encodeURIComponent(spreadsheetId);
 
     var options = {
       method: 'delete',
@@ -436,10 +443,13 @@ function deleteSupabaseConfigMirror(spreadsheetId) {
  */
 function setupDeveloperCredentials() {
   PropertiesService.getScriptProperties().setProperties({
-    'SLACK_CLIENT_ID':     'REDACTED_SLACK_CLIENT_ID',
-    'SLACK_CLIENT_SECRET': 'REDACTED_SLACK_CLIENT_SECRET',
-    'DEPLOYED_WEBAPP_URL': 'https://apjftvnmskckrhgrdpbk.supabase.co/functions/v1/bot',
-    'BOT_SECRET_KEY': 'REDACTED_BOT_SECRET_KEY'
+    'SLACK_CLIENT_ID':     'YOUR_SLACK_CLIENT_ID_HERE',
+    'SLACK_CLIENT_SECRET': 'YOUR_SLACK_CLIENT_SECRET_HERE',
+    // This is the SUPABASE function URL, not a Google Apps Script URL — used for Slack OAuth redirect_uri construction.
+    'DEPLOYED_WEBAPP_URL': 'YOUR_SUPABASE_FUNCTION_URL_HERE',
+    'SUPABASE_URL':        'YOUR_SUPABASE_PROJECT_URL_HERE',
+    // Supabase secret key (formerly service_role) — grants full DB access, bypasses RLS. Never expose client-side.
+    'SUP_SECRET_KEY': 'YOUR_SUP_SECRET_KEY_HERE'
   });
   Logger.log('Developer credentials saved to ScriptProperties.');
 }
