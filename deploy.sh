@@ -37,6 +37,7 @@ SLACK_APP_ID="${SLACK_APP_ID:-A0BAGJL0933}"
 SLACK_USER_TOKEN="${SLACK_USER_TOKEN:-}"
 CLASP_DEPLOYMENT_NAME="${CLASP_DEPLOYMENT_NAME:-Production}"
 UPDATE_SLACK_URLS="${UPDATE_SLACK_URLS:-true}"
+SUPABASE_PROJECT_ID="${SUPABASE_PROJECT_ID:-}"
 
 # ── Colours ───────────────────────────────────────────────────────────────────
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
@@ -181,6 +182,32 @@ clasp push --force 2>/dev/null
 success "Helper cleaned up."
 
 # ─────────────────────────────────────────────────────────────────────────────
+header "Step 4.5 — Update & Deploy Supabase Edge Function"
+# ─────────────────────────────────────────────────────────────────────────────
+
+if [[ -z "$SUPABASE_PROJECT_ID" ]]; then
+  warn "SUPABASE_PROJECT_ID not set. Skipping Supabase deployment."
+  SUPABASE_FUNCTION_URL="$WEBAPP_URL" # Fallback to GAS directly
+else
+  info "Setting GAS_WEBAPP_URL secret in Supabase..."
+  if supabase secrets set GAS_WEBAPP_URL="$WEBAPP_URL" --project-ref "$SUPABASE_PROJECT_ID"; then
+    success "Secret GAS_WEBAPP_URL updated in Supabase."
+  else
+    warn "Failed to set Supabase secret. Make sure you are logged in to Supabase CLI."
+  fi
+
+  info "Deploying Supabase edge function 'bot'..."
+  if supabase functions deploy bot --project-ref "$SUPABASE_PROJECT_ID"; then
+    success "Supabase edge function deployed."
+  else
+    warn "Failed to deploy Supabase edge function."
+  fi
+
+  SUPABASE_FUNCTION_URL="https://${SUPABASE_PROJECT_ID}.supabase.co/functions/v1/bot"
+  success "Supabase Function URL →  $SUPABASE_FUNCTION_URL"
+fi
+
+# ─────────────────────────────────────────────────────────────────────────────
 header "Step 5 — Update Slack App URLs"
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -190,11 +217,11 @@ print_manual_slack_steps() {
   echo ""
   echo "  1. Interactivity & Shortcuts"
   echo "     https://api.slack.com/apps/${SLACK_APP_ID}/interactive-messages"
-  echo "     Request URL: ${WEBAPP_URL}"
+  echo "     Request URL: ${SUPABASE_FUNCTION_URL}"
   echo ""
   echo "  2. Event Subscriptions"
   echo "     https://api.slack.com/apps/${SLACK_APP_ID}/event-subscriptions"
-  echo "     Request URL: ${WEBAPP_URL}"
+  echo "     Request URL: ${SUPABASE_FUNCTION_URL}"
   echo ""
   echo "  3. OAuth & Permissions → Redirect URLs"
   echo "     https://api.slack.com/apps/${SLACK_APP_ID}/oauth"
@@ -221,10 +248,10 @@ else
     "settings": {
       "interactivity": {
         "is_enabled": true,
-        "request_url": "${WEBAPP_URL}"
+        "request_url": "${SUPABASE_FUNCTION_URL}"
       },
       "event_subscriptions": {
-        "request_url": "${WEBAPP_URL}",
+        "request_url": "${SUPABASE_FUNCTION_URL}",
         "bot_events": ["app_home_opened", "app_mention"]
       }
     },
@@ -262,6 +289,7 @@ header "Deploy complete"
 echo -e "${BOLD}Script ID:${NC}      $SCRIPT_ID"
 echo -e "${BOLD}Deployment ID:${NC}  $DEPLOYMENT_ID"
 echo -e "${BOLD}Web App URL:${NC}    $WEBAPP_URL"
+echo -e "${BOLD}Supabase URL:${NC}   ${SUPABASE_FUNCTION_URL:-}"
 echo -e "${BOLD}OAuth Redirect:${NC} $OAUTH_REDIRECT"
 echo ""
 echo -e "${GREEN}Done. Next deploy:  ${BOLD}./deploy.sh${NC}"

@@ -183,18 +183,14 @@ function resolveAlert(token, rowIndex, newStatus, notes, providedSpreadsheetId) 
   logSheet.getRange(logRowIndex, 11).setValue(notes || '');
 
   // Update pending alerts in both property stores
-  var pendingAlertsRaw = docProps.getProperty('PENDING_ALERTS')
-                      || scriptProps.getProperty('PENDING_ALERTS_' + spreadsheetId);
+  var pendingAlertsRaw = docProps.getProperty('PENDING_ALERTS');
 
   if (pendingAlertsRaw) {
     var updated     = JSON.parse(pendingAlertsRaw)
                         .filter(function(a) { return a.token !== token; });
     var updatedJson = JSON.stringify(updated);
 
-    if (_docPropsRaw) {
-      _docPropsRaw.setProperty('PENDING_ALERTS', updatedJson);
-    }
-    scriptProps.setProperty('PENDING_ALERTS_' + spreadsheetId, updatedJson);
+    docProps.setProperty('PENDING_ALERTS', updatedJson);
   }
 
   // Fire cascade to downstream sheet if configured

@@ -227,26 +227,19 @@ function saveConfig(config) {
     'AUTO_TIMESTAMP_VALUE':       config.AUTO_TIMESTAMP_VALUE       || '',
     'DUE_DATE_COL':               config.DUE_DATE_COL               || '-1',
     'FINAL_STATUS_COL':           config.FINAL_STATUS_COL           || '-1',
-    'ACTIONABLE_COLS':            config.ACTIONABLE_COLS            || '[]'
+    'ACTIONABLE_COLS':            config.ACTIONABLE_COLS            || '[]',
+    'PENDING_ALERTS':             config.PENDING_ALERTS || '[]'
   });
 
-  // ── ScriptProperties (global — keyed per spreadsheet to support multi-tenant) ──
-  scriptProps.setProperty('SPREADSHEET_ID', spreadsheetId);
-  scriptProps.setProperty('SLACK_CHANNEL_'    + spreadsheetId, config.SLACK_CHANNEL || '');
-  scriptProps.setProperty('INSTALLER_EMAIL_'  + spreadsheetId, installerEmail);
-  scriptProps.setProperty('SHEET_NAME_'       + spreadsheetId, config.SHEET_NAME     || '');
-  scriptProps.setProperty('STATUS_COL_'       + spreadsheetId, config.STATUS_COL     || '-1');
-  scriptProps.setProperty('TRIGGER_VALUE_'    + spreadsheetId, config.TRIGGER_VALUE  || '');
-  scriptProps.setProperty('NAME_COL_'         + spreadsheetId, config.NAME_COL       || '-1');
-  scriptProps.setProperty('EMAIL_COL_'        + spreadsheetId, config.EMAIL_COL      || '-1');
-  scriptProps.setProperty('EXTRA_INFO_COL_'   + spreadsheetId, config.EXTRA_INFO_COL || '-1');
-  scriptProps.setProperty('DATE_COL_'         + spreadsheetId, config.DATE_COL       || '-1');
+  // ── ScriptProperties (Global / Cross-reference) ───────────────────────────
+  // We keep only the minimum needed for cross-spreadsheet lookup or Supabase sync
+  if (config.SLACK_TOKEN) {
+    scriptProps.setProperty('SLACK_TOKEN_' + spreadsheetId, config.SLACK_TOKEN);
+  }
 
-  // New sync properties for multi-tenant triggers
-  scriptProps.setProperty('AT_COL_'         + spreadsheetId, config.AUTO_TIMESTAMP_COL         || '-1');
-  scriptProps.setProperty('AT_TRIG_COL_'    + spreadsheetId, config.AUTO_TIMESTAMP_TRIGGER_COL || '-1');
-  scriptProps.setProperty('AT_VAL_'         + spreadsheetId, config.AUTO_TIMESTAMP_VALUE       || '');
-  scriptProps.setProperty('ACTIONS_'        + spreadsheetId, config.ACTIONABLE_COLS            || '[]');
+  if (config.SLACK_TEAM_ID) {
+    scriptProps.setProperty('TEAM_SPREADSHEET_' + config.SLACK_TEAM_ID, spreadsheetId);
+  }
 
   installTriggers();
   
@@ -295,10 +288,7 @@ function disconnectApp() {
   if (spreadsheetId) {
     var scriptProps = PropertiesService.getScriptProperties();
     scriptProps.deleteProperty('SLACK_TOKEN_'    + spreadsheetId);
-    scriptProps.deleteProperty('SLACK_CHANNEL_'  + spreadsheetId);
-    scriptProps.deleteProperty('INSTALLER_EMAIL_'+ spreadsheetId);
-    scriptProps.deleteProperty('PENDING_ALERTS_' + spreadsheetId);
-    // Intentionally not deleting global SLACK_CLIENT_ID/SECRET or DEPLOYED_WEBAPP_URL
+    // Team mapping is cleared in disconnectSlack or can be done here if teamId is known.
   }
 
   return { success: true };
@@ -398,9 +388,23 @@ function getSlackOAuthUrl() {
 }
 
 function disconnectSlack() {
-  var spreadsheetId = SpreadsheetApp.getActiveSpreadsheet().getId();
-  PropertiesService.getScriptProperties()
-    .deleteProperty('SLACK_TOKEN_' + spreadsheetId);
+  var ss            = SpreadsheetApp.getActiveSpreadsheet();
+  var spreadsheetId = ss.getId();
+  var docProps      = PropertiesService.getDocumentProperties();
+  var scriptProps   = PropertiesService.getScriptProperties();
+
+  // 1. Clear Slack-specific config from DocumentProperties
+  docProps.deleteProperty('SLACK_CHANNEL');
+  
+  // 2. Remove token from ScriptProperties
+  scriptProps.deleteProperty('SLACK_TOKEN_' + spreadsheetId);
+
+  // 3. Remove team mapping from ScriptProperties
+  var teamId = docProps.getProperty('SLACK_TEAM_ID');
+  if (teamId) {
+    scriptProps.deleteProperty('TEAM_SPREADSHEET_' + teamId);
+  }
+
   deleteSupabaseConfigMirror(spreadsheetId);
 }
 

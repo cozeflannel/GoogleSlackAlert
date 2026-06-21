@@ -16,10 +16,10 @@ function onSheetEdit(e) {
     if (sheetName === 'AlertsLog') return;
 
     // ── 1. Handle Auto-Timestamp Logic ──────────────────────────────────────
-    var scriptProps = PropertiesService.getScriptProperties();
-    var atTrigCol   = parseInt(scriptProps.getProperty('AT_TRIG_COL_' + spreadsheetId) || '-1');
-    var atDateCol   = parseInt(scriptProps.getProperty('AT_COL_'      + spreadsheetId) || '-1');
-    var atVal       = scriptProps.getProperty('AT_VAL_'               + spreadsheetId);
+    var docProps    = PropertiesService.getDocumentProperties();
+    var atTrigCol   = parseInt(docProps.getProperty('AT_TRIG_COL') || '-1');
+    var atDateCol   = parseInt(docProps.getProperty('AT_COL')      || '-1');
+    var atVal       = docProps.getProperty('AT_VAL');
 
     if (atTrigCol >= 0 && atDateCol >= 0 && range.getColumn() === (atTrigCol + 1)) {
       var editValue = String(e.value).trim();
@@ -39,13 +39,7 @@ function onSheetEdit(e) {
     var editorEmail = e.user ? e.user.email : '';
     if (!editorEmail) return;
 
-    var _docPropsRaw   = PropertiesService.getDocumentProperties();
-    var docProps       = _docPropsRaw || { getProperty: function() { return null; } };
     var installerEmail = docProps.getProperty('INSTALLER_EMAIL') || '';
-
-    if (!installerEmail) {
-      installerEmail = scriptProps.getProperty('INSTALLER_EMAIL_' + spreadsheetId) || '';
-    }
 
     if (installerEmail && editorEmail.toLowerCase() === installerEmail.toLowerCase()) {
       return;
@@ -103,10 +97,9 @@ function onSheetChange(e) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 function runConditionCheck() {
-  var _docPropsRaw  = PropertiesService.getDocumentProperties();
-  var docProps      = _docPropsRaw || { getProperty: function() { return null; } };
+  var docProps      = PropertiesService.getDocumentProperties();
   var scriptProps   = PropertiesService.getScriptProperties();
-  var spreadsheetId = docProps.getProperty('SPREADSHEET_ID') || scriptProps.getProperty('SPREADSHEET_ID');
+  var spreadsheetId = docProps.getProperty('SPREADSHEET_ID');
 
   if (!spreadsheetId) {
     try {
@@ -117,14 +110,14 @@ function runConditionCheck() {
 
   if (!spreadsheetId) return;
 
-  var sheetName      = docProps.getProperty('SHEET_NAME') || scriptProps.getProperty('SHEET_NAME_' + spreadsheetId);
-  var nameCol        = parseInt(docProps.getProperty('NAME_COL') || scriptProps.getProperty('NAME_COL_' + spreadsheetId) || '-1');
-  var emailCol       = parseInt(docProps.getProperty('EMAIL_COL') || scriptProps.getProperty('EMAIL_COL_' + spreadsheetId) || '-1');
-  var statusCol      = parseInt(docProps.getProperty('STATUS_COL') || scriptProps.getProperty('STATUS_COL_' + spreadsheetId) || '-1');
-  var triggerValue   = docProps.getProperty('TRIGGER_VALUE') || scriptProps.getProperty('TRIGGER_VALUE_' + spreadsheetId);
-  var dueDateCol     = parseInt(docProps.getProperty('DUE_DATE_COL')     || scriptProps.getProperty('DUE_DATE_COL_'     + spreadsheetId) || '-1');
-  var finalStatusCol = parseInt(docProps.getProperty('FINAL_STATUS_COL') || scriptProps.getProperty('FINAL_STATUS_COL_' + spreadsheetId) || '-1');
-  var tsCol          = parseInt(docProps.getProperty('AUTO_TIMESTAMP_COL') || scriptProps.getProperty('AT_COL_'           + spreadsheetId) || '-1');
+  var sheetName      = docProps.getProperty('SHEET_NAME');
+  var nameCol        = parseInt(docProps.getProperty('NAME_COL') || '-1');
+  var emailCol       = parseInt(docProps.getProperty('EMAIL_COL') || '-1');
+  var statusCol      = parseInt(docProps.getProperty('STATUS_COL') || '-1');
+  var triggerValue   = docProps.getProperty('TRIGGER_VALUE');
+  var dueDateCol     = parseInt(docProps.getProperty('DUE_DATE_COL')     || '-1');
+  var finalStatusCol = parseInt(docProps.getProperty('FINAL_STATUS_COL') || '-1');
+  var tsCol          = parseInt(docProps.getProperty('AUTO_TIMESTAMP_COL') || '-1');
 
   var ss;
   try { ss = SpreadsheetApp.openById(spreadsheetId); } catch (e) { return; }
@@ -135,7 +128,7 @@ function runConditionCheck() {
   var data           = sheet.getDataRange().getValues();
   var today          = new Date();
   
-  var pendingAlertsRaw = docProps.getProperty('PENDING_ALERTS') || scriptProps.getProperty('PENDING_ALERTS_' + spreadsheetId);
+  var pendingAlertsRaw = docProps.getProperty('PENDING_ALERTS');
   var pendingAlerts    = pendingAlertsRaw ? JSON.parse(pendingAlertsRaw) : [];
 
   for (var i = 1; i < data.length; i++) {
@@ -212,8 +205,7 @@ function runDailyAlerts() { runConditionCheck(); }
 // ─────────────────────────────────────────────────────────────────────────────
 
 function sendWeeklyDigest() {
-  var _docPropsRaw  = PropertiesService.getDocumentProperties();
-  var docProps      = _docPropsRaw || { getProperty: function() { return null; } };
+  var docProps      = PropertiesService.getDocumentProperties();
   var spreadsheetId = docProps.getProperty('SPREADSHEET_ID');
 
   if (!spreadsheetId) return;

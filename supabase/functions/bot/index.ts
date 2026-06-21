@@ -218,7 +218,7 @@ serve(async (req) => {
       const action = payload.actions?.[0];
       if (action?.action_id === 'open_action_modal') {
         console.log("open_action_modal intercepted, trigger_id:", payload.trigger_id);
-        openModalAsync(payload, action);
+        await openModalAsync(payload, action);
         return new Response(JSON.stringify({ ok: true }), {
           headers: { "Content-Type": "application/json" }
         });

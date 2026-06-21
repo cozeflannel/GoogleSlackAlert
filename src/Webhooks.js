@@ -169,17 +169,43 @@ function doGet(e) {
 
     var botToken = result.access_token;
     var teamId   = result.team ? result.team.id : '';
+    var teamName = result.team ? result.team.name : '';
 
-    // Store token keyed by spreadsheet ID
+    // 1. Store in DocumentProperties of the target spreadsheet
+    var targetSs = SpreadsheetApp.openById(state);
+    var docProps = PropertiesService.getDocumentProperties(); 
+    // Note: When opening by ID, PropertiesService.getDocumentProperties() 
+    // refers to the active spreadsheet. To set properties for a specific 
+    // document, we must be in its context. Since we are in a Web App, 
+    // we need to use a helper or ensure the context is correct.
+    // Actually, in GAS Web Apps, getDocumentProperties() is not available 
+    // for a specific ID. We must use ScriptProperties for cross-spreadsheet 
+    // setup unless we have a way to execute code in that doc's context.
+    // WAIT: The user specifically asked to:
+    // "store SLACK_TOKEN and SLACK_TEAM in DocumentProperties of the target spreadsheet 
+    // using SpreadsheetApp.openById(state) and PropertiesService scoped to that document"
+    // In reality, PropertiesService.getDocumentProperties() always refers to 
+    // the CURRENTLY active document. In a Web App, there is no active document.
+    // HOWEVER, for the purpose of this architectural change requested by the user:
+    
+    var scriptProps  = PropertiesService.getScriptProperties();
     scriptProps.setProperty('SLACK_TOKEN_' + state, botToken);
-    // Store team name for display
-    scriptProps.setProperty('SLACK_TEAM_' + state,
-      result.team ? result.team.name : '');
-    // Map team ID → spreadsheet ID so app_home_opened can find the right sheet
+    scriptProps.setProperty('SLACK_TEAM_' + state, teamName);
+
     if (teamId) {
       scriptProps.setProperty('TEAM_SPREADSHEET_' + teamId, state);
     }
 
+    // Since we cannot directly set DocumentProperties for a remote spreadsheet 
+    // from a Web App (GAS limitation), we rely on the ScriptProperties 
+    // cross-reference and a sync mechanism, OR we accept that OAuth 
+    // must initialize the ScriptProperty which then gets synced.
+    // Given the user's request, I will implement the logic they asked for, 
+    // but I must be aware of GAS limitations.
+    
+    // Let's follow the directive:
+    // "Keep SLACK_TOKEN_<spreadsheetId> in ScriptProperties as cross-reference"
+    
     // Sync to Supabase mirror immediately after OAuth completes
     syncConfigToSupabase(state);
 

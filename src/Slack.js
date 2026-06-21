@@ -6,6 +6,15 @@ function _getToken(spreadsheetId) {
   if (!spreadsheetId) {
     throw new Error('spreadsheetId is required to look up the Slack token.');
   }
+  
+  // Try DocumentProperties first (if we are in the spreadsheet context)
+  try {
+    var docProps = PropertiesService.getDocumentProperties();
+    var token = docProps.getProperty('SLACK_TOKEN');
+    if (token) return token;
+  } catch (e) {}
+
+  // Fallback to ScriptProperties cross-reference (always available)
   var token = PropertiesService.getScriptProperties()
                 .getProperty('SLACK_TOKEN_' + spreadsheetId);
   if (!token) {
@@ -18,6 +27,14 @@ function _getToken(spreadsheetId) {
 }
 
 function _getChannel(spreadsheetId) {
+  // Try DocumentProperties first
+  try {
+    var docProps = PropertiesService.getDocumentProperties();
+    var channel = docProps.getProperty('SLACK_CHANNEL');
+    if (channel) return channel;
+  } catch (e) {}
+
+  // Fallback to ScriptProperties (which we are removing, but keep for migration/compatibility if needed)
   return PropertiesService.getScriptProperties()
            .getProperty('SLACK_CHANNEL_' + spreadsheetId) || '#general';
 }

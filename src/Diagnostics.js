@@ -3,21 +3,31 @@ function diagCheckProperties() {
   var props = sp.getProperties();
   var keys  = Object.keys(props).sort();
 
-  Logger.log('ALL SCRIPT PROPERTIES (' + keys.length + ' total)');
+  Logger.log('--- SCRIPT PROPERTIES (Developer/Global) ---');
   keys.forEach(function(k) {
     var v = (k.indexOf('TOKEN') !== -1 || k.indexOf('SECRET') !== -1)
       ? '***hidden***' : props[k];
     Logger.log(k + ' = ' + JSON.stringify(v));
   });
 
-  var ssId = props['SPREADSHEET_ID'] || '';
-  Logger.log('\n--- KEY CHECKS (Modern Architecture) ---');
+  var docProps = PropertiesService.getDocumentProperties();
+  var dpProps  = docProps.getProperties();
+  var dpKeys   = Object.keys(dpProps).sort();
+
+  Logger.log('\n--- DOCUMENT PROPERTIES (Per-Spreadsheet) ---');
+  dpKeys.forEach(function(k) {
+    var v = (k.indexOf('TOKEN') !== -1 || k.indexOf('SECRET') !== -1)
+      ? '***hidden***' : dpProps[k];
+    Logger.log(k + ' = ' + JSON.stringify(v));
+  });
+
+  var ssId = dpProps['SPREADSHEET_ID'] || '';
+  Logger.log('\n--- KEY CHECKS ---');
   [
-    ['SPREADSHEET_ID (Global)',    !!ssId],
-    ['SLACK_CLIENT_ID',            !!props['SLACK_CLIENT_ID']],
-    ['DEPLOYED_WEBAPP_URL',        !!props['DEPLOYED_WEBAPP_URL']],
-    ['SLACK_TOKEN (Multi-tenant)', !!props['SLACK_TOKEN_' + ssId]],
-    ['SHEET_NAME (Multi-tenant)',  !!props['SHEET_NAME_' + ssId]]
+    ['SPREADSHEET_ID (Doc)',            !!ssId],
+    ['SLACK_CLIENT_ID (Script)',       !!props['SLACK_CLIENT_ID']],
+    ['DEPLOYED_WEBAPP_URL (Script)',   !!props['DEPLOYED_WEBAPP_URL']],
+    ['SLACK_TOKEN (Script Cross-Ref)', !!props['SLACK_TOKEN_' + ssId]]
   ].forEach(function(c) { Logger.log((c[1] ? '✅ ' : '❌ ') + c[0]); });
 }
 
