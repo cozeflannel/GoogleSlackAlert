@@ -1,3 +1,5 @@
+var SUPABASE_FUNCTION_URL = 'https://apjftvnmskckrhgrdpbk.supabase.co/functions/v1/bot';
+
 function getSheetsInfo() {
   var ss      = SpreadsheetApp.getActiveSpreadsheet();
   var sheets  = ss.getSheets();
@@ -139,78 +141,16 @@ function getConfig() {
 }
 
 /**
- * Mirrors the current bot configuration to the Supabase database.
- * This eliminates the need for the Supabase function to call GAS during modal opening,
- * preventing the Slack 3-second trigger_id timeout.
+ * Saves the bot configuration to the Supabase installations table.
+ * This is now the primary write path.
  */
-function syncConfigToSupabase(spreadsheetId) {
-  try {
-    var scriptProps = PropertiesService.getScriptProperties();
-    var token       = scriptProps.getProperty('SLACK_TOKEN_' + spreadsheetId);
-    var sheetName   = scriptProps.getProperty('SHEET_NAME_' + spreadsheetId);
-    var actionable  = scriptProps.getProperty('ACTIONS_' + spreadsheetId) || '[]';
-
-    if (!token) {
-      Logger.log('syncConfigToSupabase: No token found for ' + spreadsheetId + '. Skipping.');
-      return;
-    }
-
-    // Get actual headers from the sheet
-    var headers = [];
-    try {
-      var ss = SpreadsheetApp.openById(spreadsheetId);
-      var sheet = ss.getSheetByName(sheetName);
-      if (sheet) {
-        headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
-      }
-    } catch (e) {
-      Logger.log('syncConfigToSupabase: Error reading headers: ' + e.toString());
-    }
-
-    // Use Supabase REST API (Upsert)
-    var supabaseBaseUrl = PropertiesService.getScriptProperties().getProperty('SUPABASE_URL');
-    // Supabase secret key (formerly service_role) — grants full DB access, bypasses RLS. Never expose client-side.
-    var serviceKey      = PropertiesService.getScriptProperties().getProperty('SUP_SECRET_KEY');
-    var supabaseUrl     = supabaseBaseUrl + '/rest/v1/bot_configs';
-
-    var payload = {
-      spreadsheet_id: spreadsheetId,
-      token: token,
-      headers: JSON.stringify(headers),
-      actionable_cols: actionable
-    };
-
-    var options = {
-      method: 'post',
-      contentType: 'application/json',
-      headers: {
-        'apikey': serviceKey,
-        'Authorization': 'Bearer ' + serviceKey,
-        'Prefer': 'resolution=merge-duplicates' // Upsert
-      },
-      payload: JSON.stringify(payload),
-      muteHttpExceptions: true
-    };
-
-    var response = UrlFetchApp.fetch(supabaseUrl, options);
-    if (response.getResponseCode() !== 201 && response.getResponseCode() !== 200) {
-      Logger.log('syncConfigToSupabase error: ' + response.getContentText());
-    } else {
-      Logger.log('syncConfigToSupabase: Successfully mirrored config for ' + spreadsheetId);
-    }
-  } catch (err) {
-    Logger.log('syncConfigToSupabase CRITICAL: ' + err.toString());
-  }
-}
-
 function saveConfig(config) {
   var ss            = SpreadsheetApp.getActiveSpreadsheet();
   var spreadsheetId = ss.getId();
   var installerEmail = Session.getActiveUser().getEmail();
   var docProps      = PropertiesService.getDocumentProperties();
-  var scriptProps   = PropertiesService.getScriptProperties();
 
-  // ── DocumentProperties (scoped to this spreadsheet) ──────────────────────
+  // ── DocumentProperties (Keep local copy for fast UI access) ────────────────
   docProps.setProperties({
     'SHEET_NAME':                 config.SHEET_NAME     || '',
     'SLACK_CHANNEL':              config.SLACK_CHANNEL  || '',
@@ -231,20 +171,53 @@ function saveConfig(config) {
     'PENDING_ALERTS':             config.PENDING_ALERTS || '[]'
   });
 
-  // ── ScriptProperties (Global / Cross-reference) ───────────────────────────
-  // We keep only the minimum needed for cross-spreadsheet lookup or Supabase sync
-  if (config.SLACK_TOKEN) {
-    scriptProps.setProperty('SLACK_TOKEN_' + spreadsheetId, config.SLACK_TOKEN);
-  }
-
-  if (config.SLACK_TEAM_ID) {
-    scriptProps.setProperty('TEAM_SPREADSHEET_' + config.SLACK_TEAM_ID, spreadsheetId);
-  }
-
   installTriggers();
-  
-  // Sync to Supabase mirror to prevent modal timeout
-  syncConfigToSupabase(spreadsheetId);
+
+  // ── Supabase Write (The Source of Truth) ──────────────────────────────────
+  try {
+    var scriptProps = PropertiesService.getScriptProperties();
+    var supabaseUrl = scriptProps.getProperty('SUPABASE_URL') + '/rest/v1/installations';
+    var serviceKey  = scriptProps.getProperty('SUP_SECRET_KEY');
+
+    // Get actual headers from the sheet for the mirror
+    var headers = [];
+    var sheet = ss.getSheetByName(config.SHEET_NAME);
+    if (sheet) {
+      headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+    }
+
+    var payload = {
+      spreadsheet_id: spreadsheetId,
+      installer_email: installerEmail,
+      config: JSON.stringify({
+        sheet_name: config.SHEET_NAME,
+        slack_channel: config.SLACK_CHANNEL,
+        status_col: config.STATUS_COL,
+        trigger_value: config.TRIGGER_VALUE,
+        actionable_cols: config.ACTIONABLE_COLS
+      }),
+      headers: JSON.stringify(headers)
+    };
+
+    var options = {
+      method: 'post',
+      contentType: 'application/json',
+      headers: {
+        'apikey': serviceKey,
+        'Authorization': 'Bearer ' + serviceKey,
+        'Prefer': 'resolution=merge-duplicates'
+      },
+      payload: JSON.stringify(payload),
+      muteHttpExceptions: true
+    };
+
+    var response = UrlFetchApp.fetch(supabaseUrl, options);
+    if (response.getResponseCode() >= 300) {
+      Logger.log('saveConfig Supabase error: ' + response.getContentText());
+    }
+  } catch (err) {
+    Logger.log('saveConfig Supabase CRITICAL: ' + err.toString());
+  }
 }
 
 function saveDownstreamConfig(config) {
@@ -260,7 +233,6 @@ function getDownstreamConfig() {
 
 /**
  * Completely disconnects the add-on from this sheet.
- * Deletes all managed triggers, clears all properties.
  */
 function disconnectApp() {
   var ss            = SpreadsheetApp.getActiveSpreadsheet();
@@ -271,7 +243,6 @@ function disconnectApp() {
     spreadsheetId = docProps.getProperty('SPREADSHEET_ID');
   }
 
-  // 1. Delete managed triggers
   var handlersToClean = [
     'onSheetEdit', 'onSheetChange', 'sendWeeklyDigest', 'runDailyAlerts'
   ];
@@ -281,179 +252,71 @@ function disconnectApp() {
     }
   });
 
-  // 2. Clear DocumentProperties
   PropertiesService.getDocumentProperties().deleteAllProperties();
 
-  // 3. Clear per-sheet ScriptProperties
-  if (spreadsheetId) {
-    var scriptProps = PropertiesService.getScriptProperties();
-    scriptProps.deleteProperty('SLACK_TOKEN_'    + spreadsheetId);
-    // Team mapping is cleared in disconnectSlack or can be done here if teamId is known.
-  }
+  // Also remove from Supabase
+  disconnectSlack();
 
   return { success: true };
 }
 
-/**
- * Installs all triggers for this spreadsheet, removing stale copies first.
- *
- * Triggers installed:
- *   1. onEdit    (installable) → onSheetEdit
- *   2. onChange  (installable) → onSheetChange
- *   3. Weekly time-based       → sendWeeklyDigest (Sunday 08:00)
- */
 function installTriggers() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
+  if (!ss) return;
 
-  if (!ss) {
-    var ssId = PropertiesService.getDocumentProperties()
-                 .getProperty('SPREADSHEET_ID');
-    if (ssId) {
-      ss = SpreadsheetApp.openById(ssId);
-    }
-  }
-
-  if (!ss) {
-    Logger.log('installTriggers: no active spreadsheet found.');
-    return;
-  }
-
-  var handlersToClean = [
-    'onSheetEdit', 'onSheetChange', 'sendWeeklyDigest', 'runDailyAlerts'
-  ];
-
-  // Remove any existing triggers for our handlers
+  var handlersToClean = ['onSheetEdit', 'onSheetChange', 'sendWeeklyDigest', 'runDailyAlerts'];
   ScriptApp.getProjectTriggers().forEach(function(t) {
     if (handlersToClean.indexOf(t.getHandlerFunction()) !== -1) {
       ScriptApp.deleteTrigger(t);
     }
   });
 
-  // 1. Installable onEdit — fires when a user manually edits a cell
-  ScriptApp.newTrigger('onSheetEdit')
-    .forSpreadsheet(ss)
-    .onEdit()
-    .create();
-
-  // 2. Installable onChange — fires on any value change including formula recalcs
-  ScriptApp.newTrigger('onSheetChange')
-    .forSpreadsheet(ss)
-    .onChange()
-    .create();
-
-  // 3. Weekly digest — every Sunday at 08:00
-  ScriptApp.newTrigger('sendWeeklyDigest')
-    .timeBased()
-    .onWeekDay(ScriptApp.WeekDay.SUNDAY)
-    .atHour(8)
-    .create();
-
-  Logger.log('installTriggers: onSheetEdit, onSheetChange, sendWeeklyDigest installed.');
+  ScriptApp.newTrigger('onSheetEdit').forSpreadsheet(ss).onEdit().create();
+  ScriptApp.newTrigger('onSheetChange').forSpreadsheet(ss).onChange().create();
+  ScriptApp.newTrigger('sendWeeklyDigest').timeBased().onWeekDay(ScriptApp.WeekDay.SUNDAY).atHour(8).create();
 }
-
-// Legacy alias
-function installTrigger() { installTriggers(); }
 
 function getSlackConnectionStatus() {
   var spreadsheetId = SpreadsheetApp.getActiveSpreadsheet().getId();
-  var docProps      = PropertiesService.getDocumentProperties();
-  var scriptProps   = PropertiesService.getScriptProperties();
-  var token = docProps.getProperty('SLACK_TOKEN') || scriptProps.getProperty('SLACK_TOKEN_' + spreadsheetId);
-  return { connected: !!token };
+  var scriptProps = PropertiesService.getScriptProperties();
+  var supabaseUrl = scriptProps.getProperty('SUPABASE_URL') + '/rest/v1/installations?spreadsheet_id=eq.' + spreadsheetId + '&select=slack_bot_token';
+  var serviceKey  = scriptProps.getProperty('SUP_SECRET_KEY');
+
+  try {
+    var response = UrlFetchApp.fetch(supabaseUrl, {
+      headers: { 'apikey': serviceKey, 'Authorization': 'Bearer ' + serviceKey },
+      muteHttpExceptions: true
+    });
+    var data = JSON.parse(response.getContentText());
+    return { connected: data && data.length > 0 };
+  } catch (e) {
+    return { connected: false };
+  }
 }
 
 function getSlackOAuthUrl() {
   var spreadsheetId = SpreadsheetApp.getActiveSpreadsheet().getId();
-  var docProps      = PropertiesService.getDocumentProperties();
-  var scriptProps   = PropertiesService.getScriptProperties();
-  var clientId      = docProps.getProperty('SLACK_CLIENT_ID') || scriptProps.getProperty('SLACK_CLIENT_ID_' + spreadsheetId);
-
-  // This is the SUPABASE function URL, not a Google Apps Script URL — used for Slack OAuth redirect_uri construction.
-  var deployedUrl   = docProps.getProperty('DEPLOYED_WEBAPP_URL') || scriptProps.getProperty('DEPLOYED_WEBAPP_URL_' + spreadsheetId);
-  if (!deployedUrl) {
-    throw new Error(
-      'DEPLOYED_WEBAPP_URL is not set in Script Properties. ' +
-      'Run setupDeveloperCredentials() after deploying the web app.'
-    );
-  }
-
-  var redirectUri = deployedUrl + '?action=oauth_callback';
-  var scopes      = 'chat:write,chat:write.public,channels:read,channels:join,app_mentions:read,im:write,im:history,incoming-webhook';
-
-  return 'https://slack.com/oauth/v2/authorize' +
-    '?client_id='    + encodeURIComponent(clientId) +
-    '&scope='        + encodeURIComponent(scopes) +
-    '&redirect_uri=' + encodeURIComponent(redirectUri) +
-    '&state='        + encodeURIComponent(spreadsheetId);
+  return SUPABASE_FUNCTION_URL + '?action=slack_oauth&state=' + encodeURIComponent(spreadsheetId);
 }
 
 function disconnectSlack() {
   var ss            = SpreadsheetApp.getActiveSpreadsheet();
-  var spreadsheetId = ss.getId();
-  var docProps      = PropertiesService.getDocumentProperties();
-  var scriptProps   = PropertiesService.getScriptProperties();
-
-  // 1. Clear Slack-specific config from DocumentProperties
-  docProps.deleteProperty('SLACK_CHANNEL');
-  
-  // 2. Remove token from ScriptProperties
-  scriptProps.deleteProperty('SLACK_TOKEN_' + spreadsheetId);
-
-  // 3. Remove team mapping from ScriptProperties
-  var teamId = docProps.getProperty('SLACK_TEAM_ID');
-  if (teamId) {
-    scriptProps.deleteProperty('TEAM_SPREADSHEET_' + teamId);
+  var spreadsheetId = ss ? ss.getId() : null;
+  if (!spreadsheetId) {
+    spreadsheetId = PropertiesService.getDocumentProperties().getProperty('SPREADSHEET_ID');
   }
 
-  deleteSupabaseConfigMirror(spreadsheetId);
-}
+  PropertiesService.getDocumentProperties().deleteProperty('SLACK_CHANNEL');
 
-function deleteSupabaseConfigMirror(spreadsheetId) {
-  try {
+  if (spreadsheetId) {
     var scriptProps = PropertiesService.getScriptProperties();
-    // Supabase secret key (formerly service_role) — grants full DB access, bypasses RLS. Never expose client-side.
-    var secretKey   = scriptProps.getProperty('SUP_SECRET_KEY');
-    if (!secretKey) {
-      Logger.log('deleteSupabaseConfigMirror: No SUP_SECRET_KEY set. Skipping.');
-      return;
-    }
+    var supabaseUrl = scriptProps.getProperty('SUPABASE_URL') + '/rest/v1/installations?spreadsheet_id=eq.' + encodeURIComponent(spreadsheetId);
+    var serviceKey  = scriptProps.getProperty('SUP_SECRET_KEY');
 
-    var supabaseBaseUrl = scriptProps.getProperty('SUPABASE_URL');
-    var supabaseUrl     = supabaseBaseUrl + '/rest/v1/bot_configs?spreadsheet_id=eq.' + encodeURIComponent(spreadsheetId);
-
-    var options = {
+    UrlFetchApp.fetch(supabaseUrl, {
       method: 'delete',
-      headers: {
-        'apikey': secretKey,
-        'Authorization': 'Bearer ' + secretKey
-      },
+      headers: { 'apikey': serviceKey, 'Authorization': 'Bearer ' + serviceKey },
       muteHttpExceptions: true
-    };
-
-    var response = UrlFetchApp.fetch(supabaseUrl, options);
-    if (response.getResponseCode() >= 300) {
-      Logger.log('deleteSupabaseConfigMirror error: ' + response.getContentText());
-    } else {
-      Logger.log('deleteSupabaseConfigMirror: Removed mirror for ' + spreadsheetId);
-    }
-  } catch (err) {
-    Logger.log('deleteSupabaseConfigMirror CRITICAL: ' + err.toString());
+    });
   }
-}
-
-/**
- * Run ONCE from the Apps Script editor after your first web app deployment.
- * Replace the placeholder values with your real credentials.
- */
-function setupDeveloperCredentials() {
-  PropertiesService.getScriptProperties().setProperties({
-    'SLACK_CLIENT_ID':     'YOUR_SLACK_CLIENT_ID_HERE',
-    'SLACK_CLIENT_SECRET': 'YOUR_SLACK_CLIENT_SECRET_HERE',
-    // This is the SUPABASE function URL, not a Google Apps Script URL — used for Slack OAuth redirect_uri construction.
-    'DEPLOYED_WEBAPP_URL': 'YOUR_SUPABASE_FUNCTION_URL_HERE',
-    'SUPABASE_URL':        'YOUR_SUPABASE_PROJECT_URL_HERE',
-    // Supabase secret key (formerly service_role) — grants full DB access, bypasses RLS. Never expose client-side.
-    'SUP_SECRET_KEY': 'YOUR_SUP_SECRET_KEY_HERE'
-  });
-  Logger.log('Developer credentials saved to ScriptProperties.');
 }

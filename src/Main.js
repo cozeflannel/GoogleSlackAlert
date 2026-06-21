@@ -13,8 +13,6 @@ function onSheetEdit(e) {
     var sheet         = range.getSheet();
     var sheetName     = sheet.getName();
 
-    if (sheetName === 'AlertsLog') return;
-
     // ── 1. Handle Auto-Timestamp Logic ──────────────────────────────────────
     var docProps    = PropertiesService.getDocumentProperties();
     var atTrigCol   = parseInt(docProps.getProperty('AT_TRIG_COL') || '-1');
@@ -57,6 +55,7 @@ function onSheetEdit(e) {
       timestamp:     new Date()
     };
 
+    var scriptProps = PropertiesService.getScriptProperties();
     var slackConnected = !!scriptProps.getProperty('SLACK_TOKEN_' + spreadsheetId);
 
     var slackResult = false;
@@ -69,12 +68,8 @@ function onSheetEdit(e) {
       try { emailResult = sendGmailEditAlert(editData, installerEmail); } catch (mailErr) {}
     }
 
-    var logSheet = ss.getSheetByName('AlertsLog') || _createLogSheet(ss);
-    logSheet.appendRow([
-      new Date(), editData.row, editorEmail, 'Manual Edit', generateUUID(),
-      emailResult, slackResult, false, '', '', '', sheetName, false, '',
-      editData.columnLetter, editData.oldValue, editData.newValue
-    ]);
+    // Manual edits are no longer logged to the alerts table (which is for condition alerts).
+    // They remain as transient notifications.
 
   } catch (err) {
     Logger.log('onSheetEdit ERROR: ' + err.toString());
@@ -128,9 +123,6 @@ function runConditionCheck() {
   var data           = sheet.getDataRange().getValues();
   var today          = new Date();
   
-  var pendingAlertsRaw = docProps.getProperty('PENDING_ALERTS');
-  var pendingAlerts    = pendingAlertsRaw ? JSON.parse(pendingAlertsRaw) : [];
-
   for (var i = 1; i < data.length; i++) {
     var rowIndex  = i + 1;
     var cellValue = String(data[i][statusCol]).trim();
@@ -189,12 +181,7 @@ function runConditionCheck() {
     }
 
     logAlert(ss, rowData, emailResult, slackResult, sheetName, false);
-    pendingAlerts.push(rowData);
   }
-
-  var alertsJson = JSON.stringify(pendingAlerts);
-  if (_docPropsRaw) _docPropsRaw.setProperty('PENDING_ALERTS', alertsJson);
-  scriptProps.setProperty('PENDING_ALERTS_' + spreadsheetId, alertsJson);
 }
 
 // Legacy alias
@@ -217,43 +204,40 @@ function sendWeeklyDigest() {
 
   if (!slackConnected) return;
 
-  var spreadsheet = SpreadsheetApp.openById(spreadsheetId);
-  var logSheet    = spreadsheet.getSheetByName('AlertsLog');
-
-  if (!logSheet) {
-    sendWeeklyDigestSlack(spreadsheetId, { totalAlerts: 0, resolved: 0, pending: 0, manualEdits: 0, newEditors: [] });
-    return;
-  }
-
+  // Query Supabase for alert stats for the last 7 days
   var cutoff = new Date();
   cutoff.setDate(cutoff.getDate() - 7);
+  var cutoffIso = cutoff.toISOString();
 
-  var data        = logSheet.getDataRange().getValues();
-  var totalAlerts = 0, resolved = 0, pending = 0, manualEdits = 0;
-  var editorSet   = {};
+  var supabaseUrl = scriptProps.getProperty('SUPABASE_URL') + 
+                    '/rest/v1/alerts?spreadsheet_id=eq.' + spreadsheetId + 
+                    '&created_at=gte.' + cutoffIso + '&select=*';
+  var serviceKey  = scriptProps.getProperty('SUP_SECRET_KEY');
 
-  for (var i = 1; i < data.length; i++) {
-    var ts = data[i][0];
-    if (!(ts instanceof Date) || ts < cutoff) continue;
+  try {
+    var response = UrlFetchApp.fetch(supabaseUrl, {
+      headers: { 'apikey': serviceKey, 'Authorization': 'Bearer ' + serviceKey },
+      muteHttpExceptions: true
+    });
+    var alerts = JSON.parse(response.getContentText());
 
-    var changeType = data[i][3] || '';
-    if (changeType === 'Manual Edit') {
-      manualEdits++;
-      if (data[i][2]) editorSet[data[i][2]] = true;
-    } else {
+    var totalAlerts = 0, resolved = 0, pending = 0;
+    alerts.forEach(function(a) {
       totalAlerts++;
-      if (data[i][7] === true) resolved++;
+      if (a.resolved) resolved++;
       else pending++;
-    }
-  }
+    });
 
-  sendWeeklyDigestSlack(spreadsheetId, {
-    totalAlerts: totalAlerts,
-    resolved:    resolved,
-    pending:     pending,
-    manualEdits: manualEdits,
-    newEditors:  Object.keys(editorSet)
-  });
+    sendWeeklyDigestSlack(spreadsheetId, {
+      totalAlerts: totalAlerts,
+      resolved:    resolved,
+      pending:     pending,
+      manualEdits: 0, // Manual edits are no longer in the alerts table
+      newEditors:  []
+    });
+  } catch (e) {
+    Logger.log('sendWeeklyDigest Supabase error: ' + e.toString());
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -307,49 +291,85 @@ function fireCascadeIfConfigured(spreadsheetId, resolvedRowData) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 function getExistingUnresolvedToken(spreadsheet, rowIndex, sheetName) {
-  var logSheet = spreadsheet.getSheetByName('AlertsLog');
-  if (!logSheet) return null;
+  var spreadsheetId = spreadsheet.getId();
+  var scriptProps = PropertiesService.getScriptProperties();
+  var supabaseUrl = scriptProps.getProperty('SUPABASE_URL') + 
+                    '/rest/v1/alerts?spreadsheet_id=eq.' + spreadsheetId + 
+                    '&sheet_name=eq.' + encodeURIComponent(sheetName) + 
+                    '&row_index=eq.' + rowIndex + 
+                    '&resolved=eq.false&select=token';
+  var serviceKey  = scriptProps.getProperty('SUP_SECRET_KEY');
 
-  var data = logSheet.getDataRange().getValues();
-  for (var i = data.length - 1; i > 0; i--) {
-    if (data[i][11] === sheetName && data[i][1] === rowIndex && data[i][12] !== true && data[i][7] !== true) {
-      return data[i][4];
-    }
+  try {
+    var response = UrlFetchApp.fetch(supabaseUrl, {
+      headers: { 'apikey': serviceKey, 'Authorization': 'Bearer ' + serviceKey },
+      muteHttpExceptions: true
+    });
+    var data = JSON.parse(response.getContentText());
+    if (data && data.length > 0) return data[0].token;
+  } catch (e) {
+    Logger.log('getExistingUnresolvedToken Supabase error: ' + e.toString());
   }
   return null;
 }
 
 function getCascadeTokenForRow(spreadsheet, sheetName, rowIndex) {
-  var logSheet = spreadsheet.getSheetByName('AlertsLog');
-  if (!logSheet) return null;
+  var spreadsheetId = spreadsheet.getId();
+  var scriptProps = PropertiesService.getScriptProperties();
+  var supabaseUrl = scriptProps.getProperty('SUPABASE_URL') + 
+                    '/rest/v1/alerts?spreadsheet_id=eq.' + spreadsheetId + 
+                    '&sheet_name=eq.' + encodeURIComponent(sheetName) + 
+                    '&row_index=eq.' + rowIndex + 
+                    '&resolved=eq.false&select=token';
+  var serviceKey  = scriptProps.getProperty('SUP_SECRET_KEY');
 
-  var data = logSheet.getDataRange().getValues();
-  for (var i = data.length - 1; i > 0; i--) {
-    if (data[i][11] === sheetName && data[i][1] === rowIndex && data[i][12] === true && data[i][7] !== true) {
-      return data[i][4];
-    }
+  try {
+    var response = UrlFetchApp.fetch(supabaseUrl, {
+      headers: { 'apikey': serviceKey, 'Authorization': 'Bearer ' + serviceKey },
+      muteHtttpExceptions: true
+    });
+    var data = JSON.parse(response.getContentText());
+    if (data && data.length > 0) return data[0].token;
+  } catch (e) {
+    Logger.log('getCascadeTokenForRow Supabase error: ' + e.toString());
   }
   return null;
 }
 
 function logAlert(spreadsheet, rowData, emailSent, slackSent, sheetName, isCascade) {
-  var logSheet = spreadsheet.getSheetByName('AlertsLog') || _createLogSheet(spreadsheet);
-  logSheet.appendRow([
-    new Date(), rowData.rowIndex, rowData.clientName, rowData.status, rowData.token,
-    emailSent, slackSent, false, '', '', '', sheetName || '', isCascade || false,
-    rowData.cascadeFrom || '', '', '', ''
-  ]);
-}
+  var spreadsheetId = spreadsheet.getId();
+  var scriptProps = PropertiesService.getScriptProperties();
+  var supabaseUrl = scriptProps.getProperty('SUPABASE_URL') + '/rest/v1/alerts';
+  var serviceKey  = scriptProps.getProperty('SUP_SECRET_KEY');
 
-function _createLogSheet(spreadsheet) {
-  var logSheet = spreadsheet.insertSheet('AlertsLog');
-  logSheet.appendRow([
-    'Timestamp', 'RowIndex', 'Name/Editor', 'Condition/Type', 'Token',
-    'EmailSent', 'SlackSent', 'Resolved', 'ResolvedAt', 'ResolvedBy',
-    'Notes', 'SheetName', 'IsCascade', 'CascadeFrom',
-    'EditColumn', 'OldValue', 'NewValue'
-  ]);
-  return logSheet;
+  var payload = {
+    spreadsheet_id: spreadsheetId,
+    sheet_name:     sheetName || rowData.sheetName,
+    row_index:      rowData.rowIndex,
+    client_name:    rowData.clientName,
+    status:         rowData.status,
+    token:          rowData.token,
+    email_sent:     emailSent,
+    slack_sent:     slackSent,
+    resolved:       false,
+    is_cascade:     isCascade || false,
+    cascade_from:   rowData.cascadeFrom || ''
+  };
+
+  try {
+    UrlFetchApp.fetch(supabaseUrl, {
+      method: 'post',
+      contentType: 'application/json',
+      headers: {
+        'apikey': serviceKey,
+        'Authorization': 'Bearer ' + serviceKey
+      },
+      payload: JSON.stringify(payload),
+      muteHttpExceptions: true
+    });
+  } catch (err) {
+    Logger.log('logAlert Supabase CRITICAL: ' + err.toString());
+  }
 }
 
 function generateUUID() { return Utilities.getUuid(); }
@@ -376,19 +396,22 @@ function debugConfig() {
     Logger.log('  ' + k + ' = ' + v);
   });
 
-  Logger.log('\n=== Key ScriptProperties ===');
+  Logger.log('
+=== Key ScriptProperties ===');
   ['SPREADSHEET_ID', 'SLACK_CLIENT_ID', 'DEPLOYED_WEBAPP_URL'].forEach(function(k) {
     Logger.log('  ' + k + ' = ' + (sp.getProperty(k) || '(not set)'));
   });
 
   if (ssId) {
-    Logger.log('\n=== Per-spreadsheet ScriptProperties ===');
-    Logger.log('  SLACK_TOKEN_'   + ssId + ' = ' + (sp.getProperty('SLACK_TOKEN_' + ssId) ? 'SET ✅' : 'NOT SET ❌'));
-    Logger.log('  SLACK_CHANNEL_' + ssId + ' = ' + (sp.getProperty('SLACK_CHANNEL_' + ssId) || '(not set)'));
-    Logger.log('  INSTALLER_EMAIL_' + ssId + ' = ' + (sp.getProperty('INSTALLER_EMAIL_' + ssId) || '(not set)'));
+    Logger.log('
+=== Per-spreadsheet ScriptProperties ===');
+    ['SLACK_TOKEN_'   + ssId, 'SLACK_CHANNEL_' + ssId, 'INSTALLER_EMAIL_' + ssId].forEach(function(k) {
+      Logger.log('  ' + k + ' = ' + (sp.getProperty(k) ? 'SET ✅' : 'NOT SET ❌'));
+    });
   }
 
-  Logger.log('\n=== Installed triggers ===');
+  Logger.log('
+=== Installed triggers ===');
   ScriptApp.getProjectTriggers().forEach(function(t) {
     Logger.log('  handler=' + t.getHandlerFunction() + ' type=' + t.getEventType() + ' sourceId=' + t.getTriggerSourceId());
   });

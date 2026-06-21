@@ -1,30 +1,23 @@
-import { serve } from "https://deno.land/std@0.168.0/http/server.ts"
+import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 
 /**
  * Verifies a Slack request using HMAC-SHA256 signature.
- * See: https://api.slack.com/authentication/verifying-requests-from-slack
- *
- * Returns true if the signature is valid, false otherwise.
- * Must be called BEFORE the body is consumed / parsed.
  */
 async function verifySlackSignature(req: Request, rawBody: string): Promise<boolean> {
   const signingSecret = Deno.env.get("SLACK_SIGNING_SECRET");
   if (!signingSecret) {
-    console.error("SLACK_SIGNING_SECRET is not set — rejecting all POST requests.");
+    console.error("SLACK_SIGNING_SECRET is not set");
     return false;
   }
 
   const timestamp = req.headers.get("X-Slack-Request-Timestamp");
-  const slackSig  = req.headers.get("X-Slack-Signature");
-
+  const slackSig = req.headers.get("X-Slack-Signature");
   if (!timestamp || !slackSig) return false;
 
-  // Reject requests older than 5 minutes to prevent replay attacks
   const nowSec = Math.floor(Date.now() / 1000);
   if (Math.abs(nowSec - parseInt(timestamp, 10)) > 300) return false;
 
   const sigBaseString = `v0:${timestamp}:${rawBody}`;
-
   const encoder = new TextEncoder();
   const key = await crypto.subtle.importKey(
     "raw",
@@ -35,163 +28,85 @@ async function verifySlackSignature(req: Request, rawBody: string): Promise<bool
   );
 
   const signatureBuffer = await crypto.subtle.sign("HMAC", key, encoder.encode(sigBaseString));
-  const hexSignature = "v0=" + Array.from(new Uint8Array(signatureBuffer))
-    .map(b => b.toString(16).padStart(2, "0"))
-    .join("");
+  const hexSignature =
+    "v0=" +
+    Array.from(new Uint8Array(signatureBuffer))
+      .map((b) => b.toString(16).padStart(2, "0"))
+      .join("");
 
-  // Constant-time comparison
-  if (hexSignature.length !== slackSig.length) return false;
-  let mismatch = 0;
-  for (let i = 0; i < hexSignature.length; i++) {
-    mismatch |= hexSignature.charCodeAt(i) ^ slackSig.charCodeAt(i);
-  }
-  return mismatch === 0 ? (console.log("Slack signature verified successfully"), true) : (console.warn("Slack signature mismatch"), false);
-}
-
-async function openModalAsync(payload: any, action: any) {
-  try {
-    console.log("openModalAsync started. trigger_id present?", Boolean(payload?.trigger_id));
-    console.log("views.open trigger_id:", payload?.trigger_id);
-
-    const actionValue = JSON.parse(action.value);
-    const { spreadsheetId, rowIndex } = actionValue;
-
-    const dbUrl = `${Deno.env.get("SUPABASE_URL")}/rest/v1/bot_configs?spreadsheet_id=eq.${spreadsheetId}&select=*`;
-    const dbRes = await fetch(dbUrl, {
-      headers: {
-        // Supabase secret key (formerly service_role) — grants full DB access, bypasses RLS. Never expose client-side.
-        'apikey': Deno.env.get("SUP_SECRET_KEY")!,
-        'Authorization': `Bearer ${Deno.env.get("SUP_SECRET_KEY")}`
-      }
-    });
-
-    const dbData = await dbRes.json();
-    if (!dbData?.length) throw new Error("No config found — re-save settings in Google Sheet");
-
-    const { token, headers, actionable_cols } = dbData[0];
-
-    const blocks: any[] = [
-      { type: 'section', text: { type: 'mrkdwn', text: `Updating row *${rowIndex}*.` } }
-    ];
-
-    (actionable_cols || []).forEach((colIdx: string) => {
-      const headerName = (headers || [])[parseInt(colIdx)] || `Column ${colIdx}`;
-      blocks.push({
-        type: 'input', block_id: `col_${colIdx}_block`,
-        element: { type: 'plain_text_input', action_id: `col_${colIdx}_input` },
-        label: { type: 'plain_text', text: headerName }
-      });
-    });
-
-    blocks.push({
-      type: 'input', block_id: 'notes_block', optional: true,
-      element: { type: 'plain_text_input', action_id: 'notes_input', multiline: true },
-      label: { type: 'plain_text', text: 'Notes' }
-    });
-
-    const slackRes = await fetch('https://slack.com/api/views.open', {
-      method: 'POST',
-      headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        trigger_id: payload.trigger_id,
-        view: {
-          type: 'modal', callback_id: 'resolve_alert_modal',
-          private_metadata: action.value,
-          title: { type: 'plain_text', text: 'Resolve Alert' },
-          submit: { type: 'plain_text', text: 'Submit' },
-          close: { type: 'plain_text', text: 'Cancel' },
-          blocks
-        }
-      })
-    });
-
-    const result = await slackRes.json();
-    console.log("views.open result:", result);
-    if (!result.ok) console.error("views.open failed:", result.error);
-    else console.log("views.open succeeded for row", rowIndex);
-  } catch (err) {
-    console.error("openModalAsync error:", err.message);
-  }
+  // NOTE: This can be logged if needed (but avoid logging secrets).
+  return hexSignature === slackSig;
 }
 
 serve(async (req) => {
   try {
-    const rawUrl = Deno.env.get("GAS_WEBAPP_URL")?.trim();
-    if (!rawUrl) {
-      console.error("ERROR: GAS_WEBAPP_URL secret is empty.");
-      return new Response("Missing Configuration", { status: 500 });
-    }
-
     const url = new URL(req.url);
-    const gasUrl = new URL(rawUrl);
-    url.searchParams.forEach((val, key) => gasUrl.searchParams.set(key, val));
+    const action = url.searchParams.get("action");
 
-    // 1. Handle GET requests — no Slack signature check needed
-    if (req.method === 'GET' || req.method === 'HEAD') {
-      const action = url.searchParams.get("action");
+    console.log("---- Incoming request ----");
+    console.log("method:", req.method);
+    console.log("path:", url.pathname);
+    console.log("action:", action);
+    console.log("content-type:", req.headers.get("content-type"));
 
-      if (action === 'diag') {
-        try {
-          const dbUrl = `${Deno.env.get("SUPABASE_URL")}/rest/v1/bot_configs?select=*`;
-          const dbRes = await fetch(dbUrl, {
-            headers: {
-              // Supabase secret key (formerly service_role) — grants full DB access, bypasses RLS. Never expose client-side.
-              'apikey': Deno.env.get("SUP_SECRET_KEY")!,
-              'Authorization': `Bearer ${Deno.env.get("SUP_SECRET_KEY")}`
-            }
-          });
-          const data = await dbRes.json();
-          return new Response(JSON.stringify({
-            status: 'OK',
-            db_response: dbRes.status,
-            count: Array.isArray(data) ? data.length : 0,
-            data: data
-          }), { headers: { "Content-Type": "application/json" } });
-        } catch (err) {
-          return new Response(JSON.stringify({ status: 'ERROR', message: err.message }), {
-            status: 500,
-            headers: { "Content-Type": "application/json" }
-          });
-        }
+    // 1. Handle GET requests
+    if (req.method === "GET" || req.method === "HEAD") {
+      if (action === "slack_oauth") {
+        const spreadsheetId = url.searchParams.get("state");
+        const clientId = Deno.env.get("SLACK_CLIENT_ID");
+        const redirectUri = `${Deno.env.get("SUP_URL")}/functions/v1/bot?action=oauth_callback`;
+        const scopes =
+          "chat:write,chat:write.public,channels:read,channels:join,app_mentions:read,im:write";
+
+        const slackAuthUrl =
+          "https://slack.com/oauth/v2/authorize" +
+          "?client_id=" +
+          encodeURIComponent(clientId!) +
+          "&scope=" +
+          encodeURIComponent(scopes) +
+          "&redirect_uri=" +
+          encodeURIComponent(redirectUri) +
+          "&state=" +
+          encodeURIComponent(spreadsheetId!);
+
+        console.log("Redirecting to Slack OAuth URL");
+        return Response.redirect(slackAuthUrl, 302);
+      }
+
+      if (action === "oauth_callback") {
+        console.log("OAuth callback route hit (TODO not implemented).");
+        return new Response("OAuth Callback Received. Please close this window.", {
+          headers: { "Content-Type": "text/html" },
+        });
       }
 
       if (action === "privacy") {
-        return new Response(`
-          <html><body style="font-family:sans-serif; padding:40px; line-height:1.6; max-width:800px; margin:auto;">
-            <h1>Privacy Policy - SheetAlerts</h1>
-            <p>SheetAlerts only accesses your spreadsheets to monitor for specific condition changes you define.</p>
-            <p>We do not store your spreadsheet data on our servers. All alerts are forwarded directly to Slack/Gmail.</p>
-            <p>For support, please contact: support@example.com</p>
-          </body></html>
-        `, { headers: { "Content-Type": "text/html" } });
+        console.log("Privacy route hit.");
+        return new Response(`<html><body><h1>Privacy Policy</h1></body></html>`, {
+          headers: { "Content-Type": "text/html" },
+        });
       }
 
-      if (!action) {
-        return new Response(`
-          <html><body style="font-family:sans-serif; text-align:center; padding:100px;">
-            <h1 style="color:#0052cc;">SheetAlerts is Active</h1>
-            <p style="font-size:1.2em;">Your intelligent spreadsheet-to-Slack bridge is running.</p>
-            <p style="color:#666;">Status: Connected to Google Apps Script</p>
-          </body></html>
-        `, { headers: { "Content-Type": "text/html" } });
-      }
-
-      console.log("PROXY: Forwarding GET to Google...");
-      return await fetch(gasUrl.toString(), { redirect: 'follow' });
+      console.log("Default GET route hit.");
+      return new Response("SheetAlerts Edge Function Active", { status: 200 });
     }
 
-    // 2. Handle POST requests — verify Slack signature BEFORE parsing body
+    // 2. Handle POST requests
     const bodyText = await req.text();
+    console.log("raw body length:", bodyText.length);
 
-    const isSlackSigned = await verifySlackSignature(req, bodyText);
-    if (!isSlackSigned) {
-      console.error("Slack signature verification failed — rejecting request.");
+    const verified = await verifySlackSignature(req, bodyText);
+    console.log("slack signature verified:", verified);
+
+    if (!verified) {
+      console.log("Unauthorized: signature verification failed.");
       return new Response("Unauthorized", { status: 401 });
     }
 
     const contentType = req.headers.get("content-type") ?? "";
-    let payload: any;
+    console.log("Parsing request based on content-type:", contentType);
 
+    let payload: any;
     if (contentType.includes("application/x-www-form-urlencoded")) {
       const form = new URLSearchParams(bodyText);
       const raw = form.get("payload");
@@ -204,43 +119,33 @@ serve(async (req) => {
       }
     }
 
-    // Instant Slack Handshake
-    if (payload.type === 'url_verification') {
-      console.log("Slack handshake detected.");
-      return new Response(
-        JSON.stringify({ challenge: payload.challenge }),
-        { headers: { "Content-Type": "application/json" } }
-      );
+    console.log("payload keys:", payload ? Object.keys(payload) : []);
+    console.log("payload.type:", payload?.type);
+
+    // Slack Handshake
+    if (payload.type === "url_verification") {
+      console.log("Handling Slack url_verification handshake.");
+      const challenge = payload.challenge;
+
+      const resPayload = { challenge };
+      console.log("returning JSON:", resPayload);
+
+      return new Response(JSON.stringify(resPayload), {
+        headers: { "Content-Type": "application/json" },
+      });
     }
 
-    // Intercept "Take Action" Modal — respond immediately, open modal async
-    if (payload.type === 'block_actions') {
-      const action = payload.actions?.[0];
-      if (action?.action_id === 'open_action_modal') {
-        console.log("open_action_modal intercepted, trigger_id:", payload.trigger_id);
-        await openModalAsync(payload, action);
-        return new Response(JSON.stringify({ ok: true }), {
-          headers: { "Content-Type": "application/json" }
-        });
-      }
-    }
+    // TODO: Implement block_actions and view_submission handlers
+    console.log("No specific handler yet; returning ok:true");
+    const resPayload = { ok: true };
+    console.log("returning JSON:", resPayload);
 
-    // Forward all other POSTs to Google
-    console.log("PROXY: Forwarding POST to Google...");
-    const fwdHeaders = new Headers();
-    if (req.headers.get("content-type")) {
-      fwdHeaders.set("content-type", req.headers.get("content-type")!);
-    }
-    const response = await fetch(gasUrl.toString(), {
-      method: 'POST',
-      headers: fwdHeaders,
-      body: bodyText,
-      redirect: 'follow'
+    return new Response(JSON.stringify(resPayload), {
+      headers: { "Content-Type": "application/json" },
     });
-    return response;
-
   } catch (err) {
-    console.error("PROXY CRASH:", err.message);
-    return new Response(`Internal Server Error: ${err.message}`, { status: 500 });
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error("Edge Function Error:", msg);
+    return new Response(`Internal Server Error: ${msg}`, { status: 500 });
   }
 });
